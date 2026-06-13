@@ -326,6 +326,7 @@ def _preflight_live(entries) -> list[RepoState]:
               help="Operate on all repo groups.")
 @click.pass_context
 def cli(ctx, repo, all_groups):
+    """Manage git repository clones across local and remote hosts."""
     ctx.ensure_object(dict)
     config = load_config()
     ctx.obj["config"] = config

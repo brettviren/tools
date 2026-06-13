@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# @describe merge Claude Code settings from ~/.claude up through the current directory
 # Merge Claude Code settings from ~/.claude and ancestor directories up to cwd.
 # Merge policy (matches Claude Code's intended behavior):
 #   objects -> deep merged; arrays -> concatenated; scalars -> higher priority wins

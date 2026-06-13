@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# @describe kitty split fuzzy file browser with icat/batcat preview
 # kfz -- kitty split fuzzy file browser with icat/batcat preview
 # Usage:
 #   kfz [dir]                    open browser in dir (default: .)

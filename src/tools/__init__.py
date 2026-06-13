@@ -237,6 +237,92 @@ def _add_script_file(doc: tomlkit.TOMLDocument, entry: str) -> None:
         sf.append(entry)
 
 
+# ── description extraction ────────────────────────────────────────────────────
+
+def _bash_description(path: Path) -> tuple[str | None, bool]:
+    """Return (description, needs_llm).  Reads @describe from the script."""
+    m = re.search(r'^#\s*@describe\s+(.+)$', path.read_text(), re.MULTILINE)
+    return (m.group(1).strip(), False) if m else (None, True)
+
+
+def _python_description(module_path: str, fn: str) -> tuple[str | None, bool]:
+    """Return (description, needs_llm).  Uses the Click command's help text."""
+    try:
+        mod = importlib.import_module(module_path)
+        cmd = getattr(mod, fn)
+        help_text = (cmd.help or "").strip()
+    except Exception:
+        return None, True
+    first = next((l.strip() for l in help_text.splitlines() if l.strip()), "")
+    return (first, False) if first else (None, True)
+
+
+# ── description updaters ───────────────────────────────────────────────────────
+
+def _update_bash_description(path: Path, desc: str) -> None:
+    """Add or replace the @describe line in a Bash script."""
+    text = path.read_text()
+    new_line = f"# @describe {desc}"
+    pat = re.compile(r"^#\s*@describe\s+.*$", re.MULTILINE)
+    if pat.search(text):
+        text = pat.sub(new_line, text, count=1)
+    else:
+        lines = text.splitlines(keepends=True)
+        idx = 1 if lines and lines[0].startswith("#!") else 0
+        lines.insert(idx, new_line + "\n")
+        text = "".join(lines)
+    path.write_text(text)
+
+
+def _update_python_description(path: Path, fn_name: str, desc: str) -> None:
+    """Update or insert a one-line docstring for fn_name in a Python source file."""
+    text = path.read_text()
+    tree = ast.parse(text)
+    src = text.splitlines(keepends=True)
+
+    target = next(
+        (n for n in tree.body
+         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name),
+        None,
+    )
+    if target is None:
+        return
+
+    # Indentation from first body line
+    first_body = src[target.body[0].lineno - 1]
+    indent = " " * (len(first_body) - len(first_body.lstrip()))
+
+    body0 = target.body[0]
+    has_docstring = (
+        isinstance(body0, ast.Expr)
+        and isinstance(body0.value, ast.Constant)
+        and isinstance(body0.value.value, str)
+    )
+
+    if has_docstring:
+        s = body0.lineno - 1       # 0-indexed inclusive start
+        e = body0.end_lineno       # 0-indexed exclusive end (end_lineno is 1-indexed)
+        first_src = src[s].lstrip()
+        quote = '"""' if first_src.startswith('"""') else "'''"
+        current = ast.get_docstring(target) or ""
+        parts = current.split("\n", 1)
+        rest = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
+        if rest:
+            rest_indented = "\n".join(
+                f"{indent}{l}" if l.strip() else "" for l in rest.splitlines()
+            )
+            new_doc = f"{indent}{quote}{desc}\n\n{rest_indented}\n{indent}{quote}\n"
+        else:
+            new_doc = f"{indent}{quote}{desc}{quote}\n"
+        result = src[:s] + [new_doc] + src[e:]
+    else:
+        ins = target.body[0].lineno - 1
+        new_doc = f'{indent}"""{desc}"""\n'
+        result = src[:ins] + [new_doc] + src[ins:]
+
+    path.write_text("".join(result))
+
+
 # ── completion / manpage generators ───────────────────────────────────────────
 
 def _gen_argc_completion(script: Path, shell: str, name: str, outdir: Path) -> None:
@@ -417,3 +503,29 @@ def manpages() -> None:
         else:
             mod_leaf = path.stem
             _gen_click_manpage(name, f"tools.{mod_leaf}", fn, outdir)
+
+
+@main.command()
+def summary() -> None:
+    """Print a one-line NAME description for every tool in the package.
+
+    Bash tools use their @describe line; Python tools use the first line of
+    their Click docstring.  Tools with no description are marked [missing].
+    """
+    root = _find_root()
+    col = 22
+
+    tools_desc = (main.help or "").splitlines()[0].strip()
+    click.echo(f"{'tools':<{col}}  {tools_desc}")
+
+    for name, kind, path, fn in _iter_scripts(root):
+        if not path.exists():
+            click.echo(f"{name:<{col}}  [missing source: {path}]", err=True)
+            continue
+
+        if kind == "bash":
+            desc, missing = _bash_description(path)
+        else:
+            desc, missing = _python_description(f"tools.{path.stem}", fn)
+
+        click.echo(f"{name:<{col}}  {desc if desc else '[missing]'}")
