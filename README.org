@@ -2,3 +2,29 @@
 
 This repo collects Bash and Python scripts that solve various problems I've hit.  They are a small subset of a larger bag of junk I use that I think may have more general use.
 
+#+begin_example
+$ uv tool install git+https://github.com/brettviren/tools
+#+end_example
+
+See what's available
+
+#+begin_example
+$ tools summary
+tools                   Manage the tools package: import scripts, generate completions and man pages.
+clones                  Manage git repository clones across local and remote hosts.
+manycron                Manage crontab fragments across many accounts.
+kfz                     kitty split fuzzy file browser with icat/batcat preview
+claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
+down                    Search for files or content using fzf-powered selection.
+bee                     Upload data to the BEE event-visualization server
+#+end_example
+
+Install man pages and completions
+
+#+begin_example
+$ tools manpages     # May need to add to your MANPATH
+$ tools completions  # Tested on fish, your shell mileage may vary
+#+end_example
+
+Each tool has help.
+
