@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Merge Claude Code settings from ~/.claude and ancestor directories up to cwd.
+# Merge policy (matches Claude Code's intended behavior):
+#   objects -> deep merged; arrays -> concatenated; scalars -> higher priority wins
+# Priority (lowest first): ~/.claude/settings.json, ~/.claude/settings.local.json,
+#   then each ancestor dir's .claude/{settings,settings.local}.json,
+#   then cwd's .claude/{settings,settings.local}.json (highest).
+
+set -euo pipefail
+
+cwd="$(realpath .)"
+home="$(realpath ~)"
+
+# Print ancestor dirs from $2 (base, lowest priority) down to $1 (target, highest)
+collect_ancestor_dirs() {
+    local target="$1" base="$2"
+    local -a chain=()
+    local dir="$target"
+    while true; do
+        chain+=("$dir")
+        [[ "$dir" == "$base" ]] && break
+        [[ "$dir" == "/" ]] && break
+        dir="$(dirname "$dir")"
+    done
+    for ((i=${#chain[@]}-1; i>=0; i--)); do
+        printf '%s\n' "${chain[$i]}"
+    done
+}
+
+files=()
+
+if [[ "$cwd" == "$home" || "$cwd" == "$home/"* ]]; then
+    while IFS= read -r dir; do
+        [[ -f "$dir/.claude/settings.json" ]]       && files+=("$dir/.claude/settings.json")
+        [[ -f "$dir/.claude/settings.local.json" ]] && files+=("$dir/.claude/settings.local.json")
+    done < <(collect_ancestor_dirs "$cwd" "$home")
+else
+    # cwd is outside home: use home as base then cwd
+    for dir in "$home" "$cwd"; do
+        [[ -f "$dir/.claude/settings.json" ]]       && files+=("$dir/.claude/settings.json")
+        [[ -f "$dir/.claude/settings.local.json" ]] && files+=("$dir/.claude/settings.local.json")
+    done
+fi
+
+if [[ ${#files[@]} -eq 0 ]]; then
+    echo "{}"
+    exit 0
+fi
+
+jq -n '
+def merge(a; b):
+  if   (a | type) == "object" and (b | type) == "object" then
+    reduce (b | keys[]) as $k (a;
+      if has($k) then .[$k] = merge(a[$k]; b[$k])
+      else .[$k] = b[$k]
+      end)
+  elif (a | type) == "array" and (b | type) == "array" then
+    a + b
+  else
+    b
+  end;
+
+reduce inputs as $layer ({}; merge(.; $layer))
+' "${files[@]}"

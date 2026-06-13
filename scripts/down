@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# @describe Search for files or content using fzf-powered selection.
+#   Use fd for file names, ag or rg for file content.
+
+# @option -a --action=print  Action for the selected file: print, edit, page/pager, or a program name
+
+# Helper: locate fd binary (fd or fdfind)
+_find_fd() {
+    if command -v fd &>/dev/null; then echo "fd"
+    elif command -v fdfind &>/dev/null; then echo "fdfind"
+    else
+        echo "error: neither 'fd' nor 'fdfind' found in PATH" >&2
+        return 1
+    fi
+}
+
+# Helper: locate rg binary (rg or ripgrep)
+_find_rg() {
+    if command -v rg &>/dev/null; then echo "rg"
+    elif command -v ripgrep &>/dev/null; then echo "ripgrep"
+    else
+        echo "error: neither 'rg' nor 'ripgrep' found in PATH" >&2
+        return 1
+    fi
+}
+
+# Helper: apply action to a file, optionally jumping to a line number
+_apply_action() {
+    local action="$1" file="$2" line="${3:-}"
+    case "$action" in
+        print)
+            echo "$file"
+            ;;
+        edit)
+            if [[ -n "${EDITOR:-}" ]]; then
+                [[ -n "$line" ]] && "${EDITOR}" +"$line" "$file" || "${EDITOR}" "$file"
+            else
+                [[ -n "$line" ]] && emacs -q -nw +"$line" "$file" || emacs -q -nw "$file"
+            fi
+            ;;
+        page|pager)
+            local pg="${PAGER:-less}"
+            [[ -n "$line" ]] && "$pg" +"$line" "$file" || "$pg" "$file"
+            ;;
+        *)
+            "$action" "$file"
+            ;;
+    esac
+}
+
+# Helper: fzf selector for --vimgrep output (file:line:col:content).
+# Displays file and content; previews file contents centered on matched line.
+_fzf_grep() {
+    fzf \
+        --delimiter ':' \
+        --with-nth '1,4..' \
+        --nth '1,4..' \
+        --preview 'bat --highlight-line {2} --color=always {1} 2>/dev/null || cat {1}' \
+        --preview-window 'right:60%:+{2}-/2' \
+        --ansi
+}
+
+_setup() {
+    action="${argc_action:-print}"
+}
+
+# @cmd Search file names matching pattern using fd or fdfind.
+#   File paths are listed in fzf; selected file contents shown in a preview column.
+# @arg pattern!  Pattern to match against file names
+fd() {
+    _setup
+    local fd_bin
+    fd_bin=$(_find_fd) || exit 1
+
+    local selected
+    selected=$(command "$fd_bin" "${argc_pattern}" | fzf \
+        --preview 'bat --color=always {} 2>/dev/null || cat {}' \
+        --preview-window 'right:60%' \
+        --ansi)
+    [[ -z "$selected" ]] && exit 0
+
+    _apply_action "$action" "$selected"
+}
+
+# @cmd Search file content matching pattern using ag (The Silver Searcher).
+#   File paths and matching lines are shown in two columns; file contents
+#   centered on the matched line appear in a third preview column.
+# @arg pattern!  Pattern to match against file contents
+ag() {
+    _setup
+    if ! command -v ag &>/dev/null; then
+        echo "error: 'ag' not found in PATH" >&2
+        exit 1
+    fi
+
+    local selected
+    selected=$(command ag --vimgrep "${argc_pattern}" | _fzf_grep)
+    [[ -z "$selected" ]] && exit 0
+
+    local file line
+    file=$(echo "$selected" | cut -d: -f1)
+    line=$(echo "$selected" | cut -d: -f2)
+    _apply_action "$action" "$file" "$line"
+}
+
+# @cmd Search file content matching pattern using rg (ripgrep).
+#   File paths and matching lines are shown in two columns; file contents
+#   centered on the matched line appear in a third preview column.
+# @arg pattern!  Pattern to match against file contents
+rg() {
+    _setup
+    local rg_bin
+    rg_bin=$(_find_rg) || exit 1
+
+    local selected
+    selected=$(command "$rg_bin" --vimgrep "${argc_pattern}" | _fzf_grep)
+    [[ -z "$selected" ]] && exit 0
+
+    local file line
+    file=$(echo "$selected" | cut -d: -f1)
+    line=$(echo "$selected" | cut -d: -f2)
+    _apply_action "$action" "$file" "$line"
+}
+
+# Subcommand with no args shows help.
+case "${1:-}" in
+    fd|ag|rg) [[ $# -eq 1 ]] && set -- "$1" --help ;;
+esac
+
+if [[ $# -eq 0 ]] || [[ "${1:-}" == --help ]] || [[ "${1:-}" == -h ]]; then
+    eval "$(argc --argc-eval "$0" "$@")" 2>&1 >&2
+    exit 0
+fi
+
+eval "$(argc --argc-eval "$0" "$@")"

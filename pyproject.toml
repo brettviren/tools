@@ -16,10 +16,14 @@ dependencies = [
 [project.scripts]
 tools = "tools:main"
 clones = "tools.clones:cli"
+manycron = "tools.manycron:cli"
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+script-files = ["scripts/kfz", "scripts/claude-context-settings", "scripts/down", "scripts/bee"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

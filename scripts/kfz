@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# kfz -- kitty split fuzzy file browser with icat/batcat preview
+# Usage:
+#   kfz [dir]                    open browser in dir (default: .)
+#   kfz preview <file> [win_id]  render file into win_id (default: $KITTY_WINDOW_ID)
+
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+
+# ── preview subcommand ────────────────────────────────────────────────────────
+if [[ "${1:-}" == "preview" ]]; then
+    shift
+    FILE="${1:-}"
+    WIN_ID="${2:-${KITTY_WINDOW_ID:-}}"
+
+    [[ -r "$FILE" ]] || exit 0
+
+    if [[ -n "${KFZ_TTY:-}" ]]; then
+        # Fast path: called from fzf execute-silent.
+        # KFZ_TTY/COLS/LINES/PX_W/PX_H were cached by main before fzf started,
+        # so we never call kitten @ here — that would use the tty protocol and
+        # clobber fzf's raw-mode terminal settings.
+        TTY_PATH="$KFZ_TTY"
+        # stty size queries the preview pty directly (read-only, safe)
+        read -r LINES COLS < <(stty size < "$TTY_PATH" 2>/dev/null) || true
+        COLS="${COLS:-${KFZ_COLS:-80}}"
+        LINES="${LINES:-${KFZ_LINES:-24}}"
+        PX_W=$(( ${KFZ_PX_W:-1920} * COLS  / ${KFZ_COLS:-1} ))
+        PX_H=$(( ${KFZ_PX_H:-1080} * LINES / ${KFZ_LINES:-1} ))
+    else
+        # Slow path: direct invocation from a normal terminal, kitten @ is fine.
+        [[ -n "$WIN_ID" ]] || { echo "kfz preview: no window id" >&2; exit 1; }
+        read -r COLS LINES PX_W PX_H PID < <(
+            kitten @ ls | jq -r --argjson wid "$WIN_ID" '
+                .[] as $os |
+                $os.tabs[].windows[] |
+                select(.id == $wid) |
+                . as $w |
+                ([$os.tabs[].windows[].columns] | add) as $oc |
+                ([$os.tabs[].windows[].lines]   | max)  as $ol |
+                [
+                    $w.columns,
+                    $w.lines,
+                    (($os.width  // 1920) / $oc * $w.columns | floor),
+                    (($os.height // 1080) / $ol * $w.lines   | floor),
+                    ($w.foreground_processes[0].pid // "")
+                ] | @tsv
+            '
+        ) || exit 0
+        TTY_PATH=$(readlink -f /proc/"$PID"/fd/1 2>/dev/null || true)
+        [[ "$TTY_PATH" == /dev/pts/* ]] || exit 0
+    fi
+
+    printf '\033[H\033[2J' > "$TTY_PATH"
+
+    MIME=$(file --brief --mime-type "$FILE" 2>/dev/null)
+
+    if [[ "$MIME" == image/* ]]; then
+        kitten icat \
+            --stdin=no \
+            --use-window-size "${COLS},${LINES},${PX_W},${PX_H}" \
+            --place "${COLS}x${LINES}@0x0" \
+            --transfer-mode=stream \
+            --align=center \
+            "$FILE" > "$TTY_PATH"
+    else
+        batcat \
+            --color=always \
+            --style=numbers,changes \
+            --paging=never \
+            --terminal-width="$COLS" \
+            -- "$FILE" > "$TTY_PATH" 2>/dev/null \
+        || cat -- "$FILE" > "$TTY_PATH"
+    fi
+
+    exit 0
+fi
+
+# ── main: open the browser ────────────────────────────────────────────────────
+[[ -n "${KITTY_WINDOW_ID:-}" ]] || { echo "kfz: must be run inside kitty" >&2; exit 1; }
+
+DIR="${1:-.}"
+FZF_WIN_ID="$KITTY_WINDOW_ID"
+
+PREVIEW_WIN_ID=$(kitten @ launch \
+    --type=window \
+    --location=vsplit \
+    --keep-focus \
+    --title="kfz-preview" \
+    -- bash -c 'stty -echo 2>/dev/null; exec sleep infinity')
+
+[[ -n "$PREVIEW_WIN_ID" ]] || { echo "kfz: failed to open preview pane" >&2; exit 1; }
+
+# Cache preview pane TTY and dimensions now, while kitten @ can still use the
+# tty protocol freely (fzf hasn't started yet).  The preview subcommand reads
+# these env vars instead of calling kitten @ ls, which would reset fzf's
+# raw-mode terminal settings via the tty protocol.
+read -r _COLS _LINES _PX_W _PX_H _PID < <(
+    kitten @ ls | jq -r --argjson wid "$PREVIEW_WIN_ID" '
+        .[] as $os |
+        $os.tabs[].windows[] |
+        select(.id == $wid) |
+        . as $w |
+        ([$os.tabs[].windows[].columns] | add) as $oc |
+        ([$os.tabs[].windows[].lines]   | max)  as $ol |
+        [
+            $w.columns,
+            $w.lines,
+            (($os.width  // 1920) / $oc * $w.columns | floor),
+            (($os.height // 1080) / $ol * $w.lines   | floor),
+            ($w.foreground_processes[0].pid // "")
+        ] | @tsv
+    '
+) || { echo "kfz: failed to query preview pane" >&2; exit 1; }
+
+export KFZ_TTY KFZ_COLS KFZ_LINES KFZ_PX_W KFZ_PX_H
+KFZ_TTY=$(readlink -f /proc/"$_PID"/fd/1 2>/dev/null || true)
+[[ "$KFZ_TTY" == /dev/pts/* ]] || { echo "kfz: cannot resolve preview pane tty" >&2; exit 1; }
+KFZ_COLS="$_COLS"
+KFZ_LINES="$_LINES"
+KFZ_PX_W="$_PX_W"
+KFZ_PX_H="$_PX_H"
+
+TMPSEL=$(mktemp)
+cleanup() {
+    kitten @ close-window --match "id:${PREVIEW_WIN_ID}" 2>/dev/null || true
+    rm -f "$TMPSEL"
+}
+trap cleanup EXIT
+
+# Explicit focus in case --keep-focus was not honoured
+kitten @ focus-window --match "id:${FZF_WIN_ID}"
+
+fzf \
+    --ansi \
+    --no-preview \
+    --bind "focus:execute-silent(${SELF} preview '{}' ${PREVIEW_WIN_ID})" \
+    --bind "load:execute-silent(${SELF} preview '{}' ${PREVIEW_WIN_ID})" \
+    --prompt="  " \
+    --height=100% \
+    --layout=reverse \
+    --info=inline \
+    < <({ fd --type f . "$DIR" 2>/dev/null || find "$DIR" -type f 2>/dev/null; }) \
+    > "$TMPSEL" || true
+
+SELECTED=$(cat "$TMPSEL")
+kitten @ focus-window --match "id:${FZF_WIN_ID}"
+[[ -n "$SELECTED" ]] && echo "$SELECTED"

@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# @describe Upload data to the BEE event-visualization server
+#   Subcommands expose each step individually; use 'push' for the full workflow.
+#   Default server is at: @@bee_url@@
+#   Default cache for log and cookie files at: @@cache@@
+# @option --url <url>    Override the default server URL for this invocation
+# @option --cache <dir>  Override the default cache directory for this invocation
+bee_url=https://www.phy.bnl.gov/twister/bee
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/bee"
+log="$cache/log"
+# Login is just getting a cookie.  If that fails, this HTML may hold clues.
+login_page="$cache/last-login-page.html"
+cookies="$cache/cookies.txt"
+
+# ---------------------------------------------------------------------------
+# Internal helpers — contain the real logic, accept positional arguments.
+# Not exposed as argc subcommands.
+# ---------------------------------------------------------------------------
+
+_setup() {
+    bee_url="${argc_url:-$bee_url}"
+    cache="${argc_cache:-$cache}"
+    log="$cache/log"
+    cookies="$cache/cookies.txt"
+    mkdir -p "$cache"
+}
+
+_curl() {
+    curl -k -s -c "$cookies" -b "$cookies" -e "$bee_url" "$@"
+}
+
+_login() {
+    # we do this for the side-effect of getting cookies.
+    _curl "$bee_url" > "$login_page" 2>> "$log"
+    if [[ $? -ne 0 ]]; then
+        echo "bee login failed, for clues why, see files:" >&2
+        echo "$login_page" >&2
+        echo "$log" >&2
+        exit 1
+    fi
+}
+
+_token() {
+    [[ ! -f "$cookies" ]] && _login
+    grep csrftoken "$cookies" | sed 's/^.*csrftoken\s*//'
+}
+
+_zip() {
+    local data="${1:-data}"
+    local dir
+    dir="$(mktemp -d /tmp/bee-upload.XXXXX)"
+    command zip -r "$dir/bee.zip" "$data" >> "$log"
+    if [[ $? -eq 0 ]]; then
+        echo "$dir/bee.zip"
+        return
+    fi
+    exit 1
+}
+
+_upload() {
+    local token filename got
+    token="$(_token)"
+    filename="$1"
+    got="$(_curl -H "X-CSRFToken: $token" -F "file=@$filename" "$bee_url/upload/")"
+    if [[ $? -eq 0 ]]; then
+        echo "$bee_url/set/$got/event/list/"
+        return
+    fi
+    echo "$got" >&2
+    exit 1
+}
+
+_push() {
+    local input="$1"
+    local purge=""
+
+    if [[ -d "$input" ]]; then
+        input="$(_zip "$input")"
+        purge="$input"
+    fi
+
+    purge=""  # tmp: cleanup disabled until zip path is verified
+
+    local url
+    url="$(_upload "$input")"
+
+    if [[ -n "$purge" ]]; then
+        rm "$input"
+        rmdir "$(dirname "$input")"
+    else
+        echo "$input"
+    fi
+
+    ${BROWSER:-echo} "$url"
+}
+
+# ---------------------------------------------------------------------------
+# argc subcommands
+# ---------------------------------------------------------------------------
+
+# @cmd Authenticate with the BEE server, storing session cookies for
+#   subsequent requests. Cookies are written to ~/.cache/bee-upload/cookies.txt.
+login() {
+    _setup
+    _login
+}
+
+# @cmd Print the CSRF token extracted from stored session cookies.
+#   Performs a login first if no cookie file exists.
+token() {
+    _setup
+    _token
+}
+
+# @cmd Compress a directory into a temporary zip file and print its path.
+#   The zip is written under /tmp/bee-upload.XXXXX/.
+# @arg data=data  Path to the directory to compress
+zip() {
+    _setup
+    _zip "${argc_data}"
+}
+
+# @cmd Upload a file to the BEE server and print the resulting event-list URL.
+#   Fetches a fresh CSRF token automatically before sending.
+# @arg file!  Path to the file to upload
+upload() {
+    _setup
+    _upload "${argc_file}"
+}
+
+# @cmd Run the full upload workflow: zip a directory if needed, upload the
+#   result, and open the event-list URL in $BROWSER (or print it if unset).
+# @arg input!  Path to a data directory or a pre-built zip file
+push() {
+    _setup
+    _push "${argc_input}"
+}
+
+# ---------------------------------------------------------------------------
+
+# Subcommand with no args shows help.
+case "${1:-}" in
+    zip|upload|push) [[ $# -eq 1 ]] && set -- "$1" --help ;;
+esac
+
+_docstring() {
+    _setup
+    sed -e "s|@@bee_url@@|$bee_url|g" -e "s|@@cache@@|$cache|g"
+}
+
+
+# Top-level help: pipe argc output through sed to expand variables in @describe.
+if [[ $# -eq 0 ]] || [[ "${1:-}" == --help ]] || [[ "${1:-}" == -h ]]; then
+    eval "$(argc --argc-eval "$0" "$@")" 2>&1 | sed -e "s|@@bee_url@@|$bee_url|g" -e "s|@@cache@@|$cache|g" >&2
+    exit 0
+fi
+
+eval "$(argc --argc-eval "$0" "$@")"
