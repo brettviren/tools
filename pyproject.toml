@@ -19,7 +19,7 @@ dependencies = [
 tools = "tools:main"
 clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
-time-entry = "tools.time-entry:main"
+time-entry = "tools.time_entry:main"
 
 [build-system]
 requires = ["setuptools>=61"]
