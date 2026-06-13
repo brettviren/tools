@@ -13,6 +13,7 @@ $ tools summary
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 clones                  Manage git repository clones across local and remote hosts.
 manycron                Manage crontab fragments across many accounts.
+time-entry              Monthly time allocator for fiscal-year project reporting.
 kfz                     kitty split fuzzy file browser with icat/batcat preview
 claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
 down                    Search for files or content using fzf-powered selection.
