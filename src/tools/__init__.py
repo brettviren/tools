@@ -405,6 +405,53 @@ def _gen_argc_completion(script: Path, shell: str, name: str, outdir: Path) -> N
     click.echo(f"  {name} ({shell}) → {out}")
 
 
+def _click_fish_source(name: str, complete_var: str) -> str:
+    """Return a correct fish completion script for a Click program.
+
+    Click's built-in fish template (_SOURCE_FISH) has two compounding bugs:
+    1. Python \\n/\\t escapes in the template string produce a literal newline
+       (breaking the `string split` call) and a literal tab (which fish treats
+       as whitespace, collapsing it to a space in `echo` output).
+    2. More fundamentally, Click outputs each completion as three *separate*
+       lines (type / value / description).  Fish command substitution already
+       splits on newlines, so `$response` is a flat list of individual fields.
+       The template's `string split \\n` on a single field like "plain" yields a
+       one-element list, so `$metadata[2]` and `$metadata[3]` never exist,
+       producing the "Missing argument at index 3" errors at completion time.
+
+    The correct approach iterates $response in steps of three and uses printf
+    to produce the tab-separated value+description line that fish expects.
+    """
+    func = f"_{name.replace('-', '_')}_completion"
+    return (
+        f"function {func};\n"
+        f"    set -l response (env {complete_var}=fish_complete"
+        f" COMP_WORDS=(commandline -cp) COMP_CWORD=(commandline -t) {name});\n"
+        f"    set -l n (count $response);\n"
+        f"    set -l i 1;\n"
+        f"    while test $i -le $n;\n"
+        f"        set -l type_ $response[$i];\n"
+        f"        set -l value $response[(math $i + 1)];\n"
+        f"        set -l help_ $response[(math $i + 2)];\n"
+        f"        set i (math $i + 3);\n"
+        f"        if test $type_ = \"dir\";\n"
+        f"            __fish_complete_directories $value;\n"
+        f"        else if test $type_ = \"file\";\n"
+        f"            __fish_complete_path $value;\n"
+        f"        else if test $type_ = \"plain\";\n"
+        f"            if test $help_ != \"_\";\n"
+        f'                printf "%s\\t%s\\n" $value $help_;\n'
+        f"            else;\n"
+        f"                echo $value;\n"
+        f"            end;\n"
+        f"        end;\n"
+        f"    end;\n"
+        f"end;\n"
+        f"\n"
+        f"complete --no-files --command {name} --arguments \"({func})\";\n"
+    )
+
+
 def _gen_click_completion(name: str, shell: str, outdir: Path) -> None:
     env_var = f"_{name.upper().replace('-', '_')}_COMPLETE"
     env = {**os.environ, env_var: f"{shell}_source"}
@@ -416,8 +463,9 @@ def _gen_click_completion(name: str, shell: str, outdir: Path) -> None:
     if not result.stdout.strip():
         click.echo(f"  {name}: no completion output", err=True)
         return
+    source = _click_fish_source(name, env_var) if shell == "fish" else result.stdout
     out = _completion_filename(shell, name, outdir)
-    out.write_text(result.stdout)
+    out.write_text(source)
     click.echo(f"  {name} ({shell}) → {out}")
 
 
