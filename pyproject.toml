@@ -12,12 +12,14 @@ dependencies = [
     "click>=8.1",
     "tomlkit>=0.12",
     "click-man>=0.4",
+    "playwright",
 ]
 
 [project.scripts]
 tools = "tools:main"
 clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
+time-entry = "tools.time-entry:main"
 
 [build-system]
 requires = ["setuptools>=61"]
