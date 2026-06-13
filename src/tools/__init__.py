@@ -1,5 +1,6 @@
 """tools – manage a collection of CLI tools installed via this package."""
 
+import ast
 import importlib
 import os
 import re
@@ -42,6 +43,88 @@ def _detect_type(script: Path) -> str:
         f"Cannot determine script type for '{script.name}' – "
         "add a recognizable shebang or use a .py extension"
     )
+
+
+def _find_click_entry_points(script: Path) -> list[str]:
+    """Return names of top-level functions decorated with @click.command/group.
+
+    Handles both ``import click`` (looks for @click.command / @click.group)
+    and ``from click import command, group`` (including aliased imports).
+    Only inspects the AST — the script is never imported.
+    """
+    try:
+        tree = ast.parse(script.read_text())
+    except SyntaxError:
+        return []
+
+    # Build the set of local names that resolve to click.command or click.group.
+    # Covers: from click import command, group, command as cmd, etc.
+    entry_local_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "click":
+            for alias in node.names:
+                if alias.name in ("command", "group"):
+                    entry_local_names.add(alias.asname or alias.name)
+
+    candidates: list[str] = []
+    for node in tree.body:                          # top-level only
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            if _is_click_entry_dec(dec, entry_local_names):
+                candidates.append(node.name)
+                break
+    return candidates
+
+
+def _is_click_entry_dec(dec: ast.expr, entry_local_names: set[str]) -> bool:
+    """True if *dec* is @click.command/group or a locally-imported equivalent."""
+    node = dec.func if isinstance(dec, ast.Call) else dec
+    if isinstance(node, ast.Attribute):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "click"
+            and node.attr in ("command", "group")
+        )
+    if isinstance(node, ast.Name):
+        return node.id in entry_local_names
+    return False
+
+
+def _resolve_entry_point(script: Path, override: str | None) -> str:
+    """Return the Click entry-point function name for *script*.
+
+    Uses *override* if given; otherwise inspects the AST.  Prefers a
+    candidate named 'main' or 'cli' when multiple are found, and always
+    emits a note when the result is non-obvious.
+    """
+    if override:
+        return override
+
+    found = _find_click_entry_points(script)
+
+    if len(found) == 1:
+        if found[0] != "main":
+            click.echo(f"  Detected entry point: {found[0]}()")
+        return found[0]
+
+    if len(found) == 0:
+        click.echo("  Note: no @click.command/group detected; defaulting to 'main'")
+        return "main"
+
+    # Multiple candidates – prefer conventional names, then first found.
+    for preferred in ("main", "cli"):
+        if preferred in found:
+            click.echo(
+                f"  Multiple Click commands found {found}; "
+                f"using '{preferred}' – pass -e to override"
+            )
+            return preferred
+    click.echo(
+        f"  Multiple Click commands found {found}; "
+        f"using '{found[0]}' – pass -e to override"
+    )
+    return found[0]
 
 
 def _detect_shell() -> str:
@@ -225,13 +308,16 @@ def main() -> None:
 @main.command("import")
 @click.argument("script", type=click.Path(exists=True, path_type=Path))
 @click.option("--force", is_flag=True, help="Overwrite existing files.")
-def import_cmd(script: Path, force: bool) -> None:
+@click.option("-e", "--entry-point", default=None, metavar="FUNC",
+              help="Python entry-point function name (auto-detected via AST if omitted).")
+def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
     """Import SCRIPT into the tools package.
 
     Bash scripts are copied to scripts/ and registered in
     [tool.setuptools] script-files so they install into bin/ directly.
     Python scripts are copied to src/tools/ and registered as entry points
-    in [project.scripts].
+    in [project.scripts].  The Click entry-point function is detected
+    automatically; use -e FUNC to override.
     """
     root = _find_root()
     kind = _detect_type(script)
@@ -259,6 +345,8 @@ def import_cmd(script: Path, force: bool) -> None:
         raise click.ClickException(f"{dest} already exists; use --force to overwrite")
     shutil.copy2(script, dest)
 
+    fn = _resolve_entry_point(script, entry_point)
+
     meta = _extract_pep723(script)
     added = _merge_pep723(doc, meta)
     if added:
@@ -274,7 +362,7 @@ def import_cmd(script: Path, force: bool) -> None:
 
     if "scripts" not in doc["project"]:
         doc["project"].add("scripts", tomlkit.table())
-    doc["project"]["scripts"][name] = f"tools.{name}:main"
+    doc["project"]["scripts"][name] = f"tools.{name}:{fn}"
     toml_path.write_text(tomlkit.dumps(doc))
     click.echo(f"Imported '{script.name}' as '{name}' (python) → {dest}")
 

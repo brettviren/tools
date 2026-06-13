@@ -15,7 +15,7 @@ dependencies = [
 
 [project.scripts]
 tools = "tools:main"
-clones = "tools.clones:main"
+clones = "tools.clones:cli"
 
 [build-system]
 requires = ["setuptools>=61"]
