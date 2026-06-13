@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
 # @describe merge Claude Code settings from ~/.claude up through the current directory
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # Merge Claude Code settings from ~/.claude and ancestor directories up to cwd.
 # Merge policy (matches Claude Code's intended behavior):
 #   objects -> deep merged; arrays -> concatenated; scalars -> higher priority wins

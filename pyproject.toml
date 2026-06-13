@@ -3,6 +3,7 @@ name = "tools"
 version = "0.1.0"
 description = "A collection of CLI tools"
 readme = {file = "README.org", content-type = "text/org"}
+license = {file = "LICENSE"}
 authors = [
     { name = "Brett Viren", email = "brett.viren@gmail.com" }
 ]

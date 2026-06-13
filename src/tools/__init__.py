@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """tools – manage a collection of CLI tools installed via this package."""
 
 import ast
@@ -12,6 +28,53 @@ from pathlib import Path
 
 import click
 import tomlkit
+
+
+# ── copyright / license ───────────────────────────────────────────────────────
+
+_COPYRIGHT_HEADER = """\
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+"""
+
+
+def _inject_copyright(path: Path, kind: str) -> None:
+    """Prepend the copyright/license header if not already present."""
+    text = path.read_text()
+    if "SPDX-License-Identifier" in text:
+        return
+    lines = text.splitlines(keepends=True)
+
+    if kind == "bash":
+        # Insert after shebang (line 0) and any leading @describe lines.
+        idx = 1 if lines and lines[0].startswith("#!") else 0
+        while idx < len(lines) and re.match(r"^#\s*@describe", lines[idx]):
+            idx += 1
+        lines.insert(idx, "\n" + _COPYRIGHT_HEADER)
+    else:
+        # Python: insert after the PEP 723 block if present, else after shebang.
+        m = _PEP723_RE.search(text)
+        if m:
+            insert_after = text[: m.end()].count("\n")
+            lines.insert(insert_after + 1, "\n" + _COPYRIGHT_HEADER)
+        else:
+            idx = 1 if lines and lines[0].startswith("#!") else 0
+            lines.insert(idx, "\n" + _COPYRIGHT_HEADER)
+
+    path.write_text("".join(lines))
 
 
 # ── package helpers ────────────────────────────────────────────────────────────
@@ -422,6 +485,7 @@ def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
         shutil.copy2(script, dest)
         dest.chmod(dest.stat().st_mode | 0o111)
 
+        _inject_copyright(dest, "bash")
         _add_script_file(doc, f"scripts/{name}")
         toml_path.write_text(tomlkit.dumps(doc))
         click.echo(f"Imported '{script.name}' as '{name}' (bash) → {dest}")
@@ -433,6 +497,7 @@ def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
         raise click.ClickException(f"{dest} already exists; use --force to overwrite")
     shutil.copy2(script, dest)
 
+    _inject_copyright(dest, "python")
     fn = _resolve_entry_point(script, entry_point)
 
     meta = _extract_pep723(script)
