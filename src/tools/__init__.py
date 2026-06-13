@@ -473,6 +473,7 @@ def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
     root = _find_root()
     kind = _detect_type(script)
     name = script.stem
+    mod_name = name.replace("-", "_")
     toml_path, doc = _load_pyproject(root)
 
     if kind == "bash":
@@ -492,7 +493,7 @@ def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
         return
 
     # Python
-    dest = root / "src" / "tools" / f"{name}.py"
+    dest = root / "src" / "tools" / f"{mod_name}.py"
     if dest.exists() and not force:
         raise click.ClickException(f"{dest} already exists; use --force to overwrite")
     shutil.copy2(script, dest)
@@ -515,9 +516,9 @@ def import_cmd(script: Path, force: bool, entry_point: str | None) -> None:
 
     if "scripts" not in doc["project"]:
         doc["project"].add("scripts", tomlkit.table())
-    doc["project"]["scripts"][name] = f"tools.{name}:{fn}"
+    doc["project"]["scripts"][name] = f"tools.{mod_name}:{fn}"
     toml_path.write_text(tomlkit.dumps(doc))
-    click.echo(f"Imported '{script.name}' as '{name}' (python) → {dest}")
+    click.echo(f"Imported '{script.name}' as '{mod_name}.py' (python) → {dest}")
 
 
 @main.command()
