@@ -1,0 +1,4 @@
+#+title: Some tools
+
+This repo collects Bash and Python scripts that solve various problems I've hit.  They are a small subset of a larger bag of junk I use that I think may have more general use.
+

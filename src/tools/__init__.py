@@ -157,20 +157,22 @@ def _man_dir() -> Path:
 
 
 def _iter_scripts(root: Path):
-    """Yield (name, kind, path) for each registered script, excluding 'tools'.
+    """Yield (name, kind, path, fn) for each registered script, excluding 'tools'.
 
-    Python scripts come from [project.scripts]; Bash scripts from
-    [tool.setuptools] script-files.
+    Python scripts come from [project.scripts]; fn is the entry-point function
+    name parsed from the ep string (e.g. 'cli' from 'tools.clones:cli').
+    Bash scripts come from [tool.setuptools] script-files; fn is None.
     """
     _, doc = _load_pyproject(root)
     for name, ep in doc.get("project", {}).get("scripts", {}).items():
         if name == "tools":
             continue
-        mod_leaf = ep.rsplit(":", 1)[0].split(".")[-1]
-        yield name, "python", root / "src" / "tools" / f"{mod_leaf}.py"
+        module, fn = ep.rsplit(":", 1)
+        mod_leaf = module.split(".")[-1]
+        yield name, "python", root / "src" / "tools" / f"{mod_leaf}.py", fn
     for sf in doc.get("tool", {}).get("setuptools", {}).get("script-files", []):
         path = root / sf
-        yield path.name, "bash", path
+        yield path.name, "bash", path, None
 
 
 # ── PEP 723 helpers ────────────────────────────────────────────────────────────
@@ -283,16 +285,16 @@ def _gen_argc_manpage(script: Path, name: str, outdir: Path) -> None:
         click.echo(f"  {name}: argc failed – {e}", err=True)
 
 
-def _gen_click_manpage(name: str, module_path: str, outdir: Path) -> None:
+def _gen_click_manpage(name: str, module_path: str, fn: str, outdir: Path) -> None:
     try:
-        from click_man.man import write_man_page  # type: ignore[import]
+        from click_man.core import write_man_pages  # type: ignore[import]
     except ImportError:
         click.echo("  click-man not installed; run: uv add click-man", err=True)
         return
     try:
         mod = importlib.import_module(module_path)
-        cmd = mod.main
-        write_man_page(name=name, command=cmd, target_dir=str(outdir))
+        cmd = getattr(mod, fn)
+        write_man_pages(name=name, cli=cmd, target_dir=str(outdir))
         click.echo(f"  {name} → {outdir}/{name}.1")
     except Exception as e:
         click.echo(f"  {name}: {e}", err=True)
@@ -388,7 +390,7 @@ def completions(shell: str | None) -> None:
 
     _gen_click_completion("tools", shell, outdir)
 
-    for name, kind, path in _iter_scripts(root):
+    for name, kind, path, _fn in _iter_scripts(root):
         if kind == "bash":
             _gen_argc_completion(path, shell, name, outdir)
         else:
@@ -407,11 +409,11 @@ def manpages() -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     click.echo(f"Man pages → {outdir}")
 
-    _gen_click_manpage("tools", "tools", outdir)
+    _gen_click_manpage("tools", "tools", "main", outdir)
 
-    for name, kind, path in _iter_scripts(root):
+    for name, kind, path, fn in _iter_scripts(root):
         if kind == "bash":
             _gen_argc_manpage(path, name, outdir)
         else:
             mod_leaf = path.stem
-            _gen_click_manpage(name, f"tools.{mod_leaf}", outdir)
+            _gen_click_manpage(name, f"tools.{mod_leaf}", fn, outdir)
