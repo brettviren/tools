@@ -20,6 +20,7 @@ tools = "tools:main"
 clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
 time-entry = "tools.time_entry:main"
+claude-status = "claude_status:main"
 
 [build-system]
 requires = ["setuptools>=61"]
