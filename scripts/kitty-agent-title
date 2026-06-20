@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# see https://flurdy.com/docs/kitty-ai-tabs/
+
+
 AGENT=${1:-agent}
 PAYLOAD=$(cat)
 
