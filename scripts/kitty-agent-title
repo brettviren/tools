@@ -1,0 +1,62 @@
+#!/bin/bash
+
+AGENT=${1:-agent}
+PAYLOAD=$(cat)
+
+json_value() {
+  local key="$1"
+  printf '%s' "$PAYLOAD" | jq -r --arg key "$key" \
+    '.[$key] // empty' 2>/dev/null
+}
+
+EVENT=$(json_value hook_event_name)
+CWD=$(json_value cwd)
+[ -z "$CWD" ] && CWD="$PWD"
+
+GIT_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
+BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null || true)
+
+if [ -n "$GIT_ROOT" ]; then
+  REPO=$(basename "$GIT_ROOT")
+else
+  REPO=$(basename "$CWD")
+fi
+
+case "$BRANCH" in
+  main|master|trunk|"") BRANCH="" ;;
+  feature/*|fix/*|bugfix/*|chore/*) BRANCH=${BRANCH#*/} ;;
+esac
+
+case "$AGENT" in
+  claude) LABEL="C $REPO" ;;
+  codex)  LABEL="X $REPO" ;;
+  *)      LABEL="$AGENT $REPO" ;;
+esac
+
+[ -n "$BRANCH" ] && LABEL="$LABEL/$BRANCH"
+
+case "$EVENT" in
+  SessionStart)                  MARK="🌱" ;;
+  UserPromptSubmit|PostToolUse)  MARK="💭" ;;
+  PreToolUse)                    MARK="⚙" ;;
+  PermissionRequest)             MARK="❓" ;;
+  Stop|SubagentStop)             MARK="✔" ;;
+  PreCompact|PostCompact)        MARK="🧹" ;;
+  *)                             MARK="" ;;
+esac
+
+TITLE="$LABEL"
+[ -n "$MARK" ] && TITLE="$TITLE $MARK"
+
+if command -v kitten >/dev/null 2>&1; then
+  kitten @ set-tab-title "$TITLE" >/dev/null 2>&1 \
+    || kitten @ set-tab-title "$TITLE" >/dev/null 2>&1 \
+    || true
+fi
+
+# Fallback to terminal title escape sequences.
+(
+  exec 2>/dev/null
+  printf '\e]30;%s\a' "$TITLE" > /dev/tty || true
+  printf '\e]2;%s\a' "$TITLE" > /dev/tty || true
+) || true
