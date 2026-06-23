@@ -29,3 +29,29 @@ $ tools completions  # Tested on fish, your shell mileage may vary
 
 Each tool has help.
 
+* Auto-reinstall on pull
+
+When developing across several clones (see the =clones= tool), each clone needs
+=uv tool install -e . --upgrade --force= re-run after a pull to expose new or
+changed tools on =$PATH=.  This repo ships git hooks under =.githooks/= that do
+this automatically after a pull touches =pyproject.toml=, =uv.lock= or =src/=.
+
+The hooks are version-controlled, but enabling them sets =core.hooksPath=, which
+is per-clone local config and cannot itself be tracked.  Enable them once:
+
+#+begin_example
+$ scripts/install-hooks here   # this clone
+$ scripts/install-hooks all    # every clone in this package's clones group
+#+end_example
+
+=install-hooks all= must be run from within a clone of this package: it fans
+out via =clones run git config core.hooksPath .githooks=, letting =clones=
+infer the group from the current directory so it only touches sibling clones of
+this package — not every configured group (many of which are not Python
+packages).  Running that =clones run= line directly is equivalent.
+
+Note: the hooks also fire on the remote side during =clones sync= (which pulls
+over ssh).  If =uv= is not on the non-interactive =$PATH= there, the hook prints
+a notice and skips; adjust the =PATH= fallback in =.githooks/_install= if your
+=uv= lives outside =~/.local/bin=.
+

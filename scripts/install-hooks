@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# @describe Point git clones at this repo's tracked .githooks/ directory.
+#   The hooks reinstall the package tools (uv tool install -e . --upgrade
+#   --force) after a pull updates pyproject.toml, uv.lock or src/.  They live
+#   under version control in .githooks/, but enabling them sets core.hooksPath,
+#   which is per-clone local config and cannot be tracked in the repo itself —
+#   hence this one-shot bootstrap.
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+hooks_dir=.githooks
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+_here() {
+    local root
+    root="$(git rev-parse --show-toplevel 2>/dev/null)" \
+        || { echo "not inside a git repository" >&2; exit 1; }
+    if [[ ! -d "$root/$hooks_dir" ]]; then
+        echo "no $hooks_dir/ under $root — wrong repository?" >&2
+        exit 1
+    fi
+    chmod +x "$root/$hooks_dir"/* 2>/dev/null
+    git -C "$root" config core.hooksPath "$hooks_dir"
+    echo "enabled $hooks_dir/ hooks in $root (core.hooksPath=$hooks_dir)"
+}
+
+_all() {
+    command -v clones >/dev/null 2>&1 \
+        || { echo "the 'clones' tool is not on PATH" >&2; exit 1; }
+    # No -a: let clones infer the group from the current clone, so this only
+    # touches sibling clones of THIS package — not every configured group
+    # (many of which are not even Python packages).
+    clones run git config core.hooksPath "$hooks_dir"
+}
+
+# ---------------------------------------------------------------------------
+# argc subcommands
+# ---------------------------------------------------------------------------
+
+# @cmd Enable the tracked hooks in the current clone.
+here() { _here; }
+
+# @cmd Enable the hooks in every clone of this package's clones group,
+#   inferred from the current directory (fans out with `clones run`).
+all() { _all; }
+
+# ---------------------------------------------------------------------------
+
+# Top-level help when given no command.
+if [[ $# -eq 0 ]] || [[ "${1:-}" == --help ]] || [[ "${1:-}" == -h ]]; then
+    eval "$(argc --argc-eval "$0" "$@")"
+    exit 0
+fi
+
+eval "$(argc --argc-eval "$0" "$@")"
