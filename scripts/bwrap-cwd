@@ -52,9 +52,11 @@ main() {
     local -a binds=(
         "$PWD"
         /tmp
-        "$TMPDIR"
         ~/.cache
     )
+    # Temp dirs from the calling environment, if set.
+    [[ -n "${TEMP:-}" ]] && binds+=("$TEMP")
+    [[ -n "${TMPDIR:-}" ]] && binds+=("$TMPDIR")
     binds+=("${BWRAP_RW[@]}")
     [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
 
