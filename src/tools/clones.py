@@ -32,6 +32,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -82,8 +83,9 @@ _SSH_BASE = [
 ]
 
 
-def run_in_repo(user, host, path, script, capture=False):
-    """Run script under 'cd path && ...' on host (or locally if host is None).
+def _repo_invocation(user, host, path, script):
+    """Return (argv, stdin_text) to run script under 'cd path && ...' on host
+    (or locally if host is None).
 
     The script is fed to bash via stdin so the remote login shell (e.g. fish)
     is never asked to parse it.
@@ -94,6 +96,12 @@ def run_in_repo(user, host, path, script, capture=False):
         argv = _SSH_BASE + [target, "bash"]
     else:
         argv = ["bash"]
+    return argv, full
+
+
+def run_in_repo(user, host, path, script, capture=False):
+    """Run script under 'cd path && ...' on host (or locally if host is None)."""
+    argv, full = _repo_invocation(user, host, path, script)
     if capture:
         return subprocess.run(argv, input=full, capture_output=True, text=True)
     return subprocess.run(argv, input=full, text=True)
@@ -367,10 +375,194 @@ def cli(ctx, repo, all_groups):
     ctx.obj["groups"] = groups
 
 
-def run_in_groups(ctx, cmd):
+# ── parallel run ─────────────────────────────────────────────────────────────
+
+
+class _RunState:
+    """Liveness and result bookkeeping for one repo in a parallel run."""
+
+    def __init__(self, label):
+        self.label = label
+        self.start = time.monotonic()
+        self.last = self.start
+        self.last_report = self.start
+        self.done = False
+        self.returncode = None
+
+    def touch(self):
+        self.last = time.monotonic()
+
+
+class _TaggedPrinter:
+    """Serialize concurrent output as '[label out] ...' / '[label err] ...' lines.
+
+    A single lock guards every write so lines from different repos never garble
+    one another; labels are padded to a common width for legibility.
+    """
+
+    def __init__(self, width):
+        self._lock = threading.Lock()
+        self.width = width
+
+    def emit(self, label, tag, line, err=False):
+        with self._lock:
+            click.echo(f"[{label.ljust(self.width)} {tag}] {line}", err=err)
+
+    def emit_block(self, label, out, err, rc):
+        with self._lock:
+            click.echo(f"==> [{label}] (exit {rc})")
+            for line in out.splitlines():
+                click.echo(f"[{label.ljust(self.width)} out] {line}")
+            for line in err.splitlines():
+                click.echo(f"[{label.ljust(self.width)} err] {line}", err=True)
+
+    def note(self, msg, err=False):
+        with self._lock:
+            click.echo(msg, err=err)
+
+
+def _stream_reader(stream, label, tag, printer, state, err):
+    """Forward each line of a process stream to the tagged printer as it arrives."""
+    for line in stream:
+        state.touch()
+        printer.emit(label, tag, line.rstrip("\n"), err=err)
+    stream.close()
+
+
+def _heartbeat(states, printer, interval, stop):
+    """Periodically note repos that are still running but have gone quiet, so a
+    long-running or remote-buffered command is never mistaken for a hang.
+
+    Polls several times per interval so a repo that falls silent is reported
+    within roughly one interval, but throttles each repo's notes to one per
+    interval so chatty-then-quiet repos are not spammed."""
+    poll = max(1.0, interval / 4)
+    while not stop.wait(poll):
+        now = time.monotonic()
+        for st in states:
+            if (not st.done
+                    and (now - st.last) >= interval
+                    and (now - st.last_report) >= interval):
+                st.last_report = now
+                printer.note(
+                    f"··· [{st.label}] running, no output for {int(now - st.last)}s "
+                    f"({int(now - st.start)}s total)",
+                    err=True,
+                )
+
+
+def _run_one_parallel(entry, state, script, printer, group_mode):
+    """Run script in one repo.  Streaming mode forwards stdout/stderr live via
+    reader threads; group mode buffers and prints the repo's output as a block."""
+    _group, _label, user, host, path = entry
+    argv, full = _repo_invocation(user, host, path, script)
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+    except OSError as exc:
+        printer.note(f"[{state.label}] failed to start: {exc}", err=True)
+        state.done = True
+        state.returncode = 127
+        return state
+
+    if group_mode:
+        out, err = proc.communicate(full)
+        printer.emit_block(state.label, out, err, proc.returncode)
+    else:
+        # Start the readers before feeding stdin so a process that emits output
+        # while still consuming its script can never deadlock on a full pipe.
+        t_out = threading.Thread(
+            target=_stream_reader,
+            args=(proc.stdout, state.label, "out", printer, state, False),
+        )
+        t_err = threading.Thread(
+            target=_stream_reader,
+            args=(proc.stderr, state.label, "err", printer, state, True),
+        )
+        t_out.start()
+        t_err.start()
+        proc.stdin.write(full)
+        proc.stdin.close()
+        proc.wait()
+        t_out.join()
+        t_err.join()
+
+    state.done = True
+    state.returncode = proc.returncode
+    return state
+
+
+def _run_parallel(entries, script, jobs, group_mode, heartbeat_interval=10):
+    """Run script in all entries concurrently.  Returns (printer, states)."""
+    multi = len({e[0] for e in entries}) > 1
+    labels = [f"{e[0]}:{e[1]}" if multi else e[1] for e in entries]
+    width = max(len(lbl) for lbl in labels)
+    printer = _TaggedPrinter(width)
+    states = [_RunState(lbl) for lbl in labels]
+
+    stop = threading.Event()
+    hb = threading.Thread(
+        target=_heartbeat, args=(states, printer, heartbeat_interval, stop),
+        daemon=True,
+    )
+    hb.start()
+
+    max_workers = jobs if jobs and jobs > 0 else min(len(entries), 32)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_run_one_parallel, e, st, script, printer, group_mode): st
+            for e, st in zip(entries, states)
+        }
+        for f in futures:
+            try:
+                f.result()
+            except Exception as exc:
+                printer.note(f"[{futures[f].label}] error: {exc}", err=True)
+
+    stop.set()
+    hb.join(timeout=2)
+    return printer, states
+
+
+def _print_run_summary(printer, states):
+    failed = [s for s in states if s.returncode not in (0, None)]
+    printer.note("")
+    if failed:
+        printer.note(f"{len(failed)} of {len(states)} repo(s) failed:", err=True)
+        for s in failed:
+            printer.note(f"  [{s.label}] exit {s.returncode}", err=True)
+    else:
+        printer.note(f"all {len(states)} repo(s) succeeded.")
+
+
+def _collect_entries(config, groups):
+    """Return a list of (group, label, user, host, path) for every repo path."""
+    entries = []
+    for group in groups:
+        paths = config[group].get("paths", [])
+        if not paths:
+            click.echo(f"warning: no paths defined for group '{group}'", err=True)
+            continue
+        for path in paths:
+            user, host, rpath = parse_path(path)
+            label = (f"{user}@{host}" if user else host) + f":{rpath}" if host else rpath
+            entries.append((group, label, user, host, rpath))
+    return entries
+
+
+def run_in_groups(ctx, cmd, parallel=False, jobs=None, group_mode=False):
     config = ctx.obj["config"]
     groups = ctx.obj["groups"]
     shell_cmd = " ".join(shlex.quote(a) for a in cmd)
+
+    if parallel:
+        entries = _collect_entries(config, groups)
+        if entries:
+            printer, states = _run_parallel(entries, shell_cmd, jobs, group_mode)
+            _print_run_summary(printer, states)
+        return
 
     for group in groups:
         paths = config[group].get("paths", [])
@@ -385,11 +577,22 @@ def run_in_groups(ctx, cmd):
 
 
 @cli.command(name="run", context_settings={"ignore_unknown_options": True})
+@click.option("-p", "--parallel", is_flag=True, default=False,
+              help="Run in all repos concurrently instead of serially.")
+@click.option("-j", "--jobs", type=int, default=None,
+              help="Max concurrent jobs with -p (default: min(#repos, 32)).")
+@click.option("--group", "group_mode", is_flag=True, default=False,
+              help="With -p, buffer each repo's output and print it as a block "
+                   "on completion (default: tagged line-interleave).")
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
-def run_cmd(ctx, cmd):
-    """Run CMD in each repo path of the selected group(s)."""
-    run_in_groups(ctx, cmd)
+def run_cmd(ctx, parallel, jobs, group_mode, cmd):
+    """Run CMD in each repo path of the selected group(s).
+
+    Options for run itself must precede CMD; use -- to pass a flag literally to
+    CMD, e.g. `clones run -p -- ls -l`.
+    """
+    run_in_groups(ctx, cmd, parallel=parallel, jobs=jobs, group_mode=group_mode)
 
 
 @cli.command(name="git", context_settings={"ignore_unknown_options": True})
