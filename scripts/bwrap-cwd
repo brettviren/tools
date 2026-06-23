@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# @describe Run a command inside bwrap with only the CWD and select paths writable.
+#
+# With no positional arguments, runs "bash" (or a profile's BWRAP_CMD). Any
+# positional arguments form the command line to run instead.
+#
+# A profile is a shell file at ~/.config/bwrap-cwd/<profile>.sh that may set:
+#   BWRAP_RW   array of paths to additionally bind read-write
+#   BWRAP_CMD  array holding the command line to run (default: bash)
+# Both are optional.
+# @option -p --profile <name>   Profile resolving to ~/.config/bwrap-cwd/<name>.sh
+# @option -b --bind* <path>     Extra path to bind read-write (repeatable)
+# @arg cmd*                     Command line to run (default: bash)
+
+set -euo pipefail
+
+config_dir=~/.config/bwrap-cwd
+
+# Source a profile file, populating BWRAP_RW and/or BWRAP_CMD.
+_load_profile() {
+    local file="$config_dir/$1.sh"
+    [[ -f "$file" ]] || { echo "bwrap-cwd: no such profile: $file" >&2; exit 1; }
+    # shellcheck disable=SC1090
+    source "$file"
+}
+
+# Build and exec the bwrap invocation given the read-write binds and command.
+_run() {
+    local -a binds=() cmd=()
+    while [[ "$1" != "--" ]]; do binds+=("$1"); shift; done
+    shift
+    cmd=("$@")
+
+    local -a args=(
+        --ro-bind / /
+        --dev /dev
+        --proc /proc
+    )
+    local p
+    for p in "${binds[@]}"; do
+        args+=(--bind "$p" "$p")
+    done
+
+    exec bwrap "${args[@]}" -- "${cmd[@]}"
+}
+
+main() {
+    local -a BWRAP_RW=() BWRAP_CMD=()
+    [[ -n "${argc_profile:-}" ]] && _load_profile "$argc_profile"
+
+    # Read-write binds: fixed defaults, then profile, then -b options.
+    local -a binds=(
+        "$PWD"
+        /tmp
+        "$TMPDIR"
+        ~/.cache
+    )
+    binds+=("${BWRAP_RW[@]}")
+    [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
+
+    # Command precedence: positional args, then profile BWRAP_CMD, then bash.
+    local -a cmd
+    if [[ -n "${argc_cmd[*]:-}" ]]; then
+        cmd=("${argc_cmd[@]}")
+    elif [[ -n "${BWRAP_CMD[*]:-}" ]]; then
+        cmd=("${BWRAP_CMD[@]}")
+    else
+        cmd=(bash)
+    fi
+
+    _run "${binds[@]}" -- "${cmd[@]}"
+}
+
+eval "$(argc --argc-eval "$0" "$@")"

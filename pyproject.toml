@@ -28,7 +28,10 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-script-files = ["scripts/kfz", "scripts/claude-context-settings", "scripts/down", "scripts/bee", "scripts/kitty-agent-title"]
+script-files = [
+             "scripts/kfz", "scripts/claude-context-settings",
+             "scripts/down", "scripts/bee", "scripts/kitty-agent-title", "scripts/bwrap-cwd"
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
