@@ -344,7 +344,7 @@ def _preflight_live(entries) -> list[RepoState]:
 # ── CLI ────────────────────────────────────────────────────────────────────
 
 @click.group()
-@click.option("--repo", envvar="CLONES_REPO", default=None,
+@click.option("-r", "--repo", envvar="CLONES_REPO", default=None,
               help="Repo group name (or set CLONES_REPO).")
 @click.option("-a", "--all", "all_groups", is_flag=True, default=False,
               help="Operate on all repo groups.")
