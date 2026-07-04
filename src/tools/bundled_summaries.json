@@ -1,0 +1,22 @@
+{
+    "miageru": "Add your description here",
+    "titome": "Add your description here",
+    "herbie": "Add your description here",
+    "passdb": "Add your description here",
+    "wcpy": "the \"new\" unified, all-in-one wirecell command",
+    "wirecell": "alias of wcpy, matching the package name",
+    "wirecell-sigproc": "legacy per-module wirecell command: sigproc",
+    "wirecell-util": "legacy per-module wirecell command: util",
+    "wirecell-gen": "legacy per-module wirecell command: gen",
+    "wirecell-pgraph": "legacy per-module wirecell command: pgraph",
+    "wirecell-resp": "legacy per-module wirecell command: resp",
+    "wirecell-plot": "legacy per-module wirecell command: plot",
+    "wirecell-aux": "legacy per-module wirecell command: aux",
+    "wirecell-ls4gan": "legacy per-module wirecell command: ls4gan",
+    "wirecell-validate": "legacy per-module wirecell command: validate",
+    "wirecell-img": "legacy per-module wirecell command: img",
+    "wirecell-test": "legacy per-module wirecell command: test",
+    "wirecell-bee": "legacy per-module wirecell command: bee",
+    "wirecell-dnn": "legacy per-module wirecell command: dnn (needs the torch extra)",
+    "wirecell-pytorch": "legacy per-module wirecell command: pytorch (needs the torch extra)"
+}

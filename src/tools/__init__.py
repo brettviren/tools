@@ -17,7 +17,10 @@
 """tools – manage a collection of CLI tools installed via this package."""
 
 import ast
+import functools
 import importlib
+import importlib.metadata
+import json
 import os
 import re
 import shutil
@@ -318,6 +321,57 @@ def _python_description(module_path: str, fn: str) -> tuple[str | None, bool]:
         return None, True
     first = next((l.strip() for l in help_text.splitlines() if l.strip()), "")
     return (first, False) if first else (None, True)
+
+
+_PLACEHOLDER_SUMMARY = "add your description here"
+
+
+@functools.lru_cache(maxsize=1)
+def _bundled_summaries() -> dict[str, str]:
+    """Curated one-line descriptions for externally-sourced scripts whose own
+    package metadata is empty or a placeholder; see the 'summary' command."""
+    path = Path(__file__).parent / "bundled_summaries.json"
+    return json.loads(path.read_text())
+
+
+def _dist_summary(name: str) -> str | None:
+    """Return the 'Summary' metadata of the distribution owning console script NAME.
+
+    Looked up via the installed console_scripts entry point rather than by
+    importing anything, so heavy external packages (torch, scipy, ...) never
+    get imported just to produce a one-line description.
+
+    The "tools" distribution re-declares every bundled command's entry point
+    (that's how 'uv tool install' is made to expose them), so it shows up as
+    a second, spurious match here; it must be excluded to find the real
+    owning package.
+    """
+    eps = importlib.metadata.entry_points(group="console_scripts", name=name)
+    ep = next((e for e in eps if e.dist and e.dist.name != "tools"), None)
+    if ep is None:
+        return None
+    return (ep.dist.metadata["Summary"] or "").strip() or None
+
+
+def _external_description(name: str) -> tuple[str | None, bool]:
+    """Return (description, needs_llm) for an externally-sourced console script.
+
+    Prefers the owning package's own Summary metadata.  When that's empty or
+    the well-known "Add your description here" placeholder, falls back to
+    bundled_summaries.json and appends U+F49B (a reminder to fix the
+    upstream package's metadata).  When metadata is fine but a now-redundant
+    bundled_summaries.json entry still exists for it, appends U+F127 instead
+    (a reminder to delete that stale entry).
+    """
+    summary = _dist_summary(name)
+    is_placeholder = not summary or summary.lower() == _PLACEHOLDER_SUMMARY
+    cached = _bundled_summaries().get(name)
+
+    if is_placeholder:
+        return (f"{cached} ", False) if cached else (None, True)
+    if cached:
+        return f"{summary} ", False
+    return summary, False
 
 
 # ── description updaters ───────────────────────────────────────────────────────
@@ -623,8 +677,14 @@ def manpages() -> None:
 def summary() -> None:
     """Print a one-line NAME description for every tool in the package.
 
-    Bash tools use their @describe line; Python tools use the first line of
-    their Click docstring.  Tools with no description are marked [missing].
+    Bash tools use their @describe line; Python tools implemented in this
+    package use the first line of their Click docstring.  Externally-sourced
+    Python tools (see [tool.uv.sources]) use their own package's Summary
+    metadata instead, so nothing gets imported just to describe it; a
+    placeholder Summary falls back to bundled_summaries.json (marked with
+    U+F49B, meaning: go fix the upstream package's metadata) and a redundant
+    bundled_summaries.json entry is flagged too (marked with U+F127, meaning:
+    go delete that entry).  Tools with no description are marked [missing].
     """
     root = _find_root()
     col = 22
@@ -633,13 +693,11 @@ def summary() -> None:
     click.echo(f"{'tools':<{col}}  {tools_desc}")
 
     for name, kind, path, fn in _iter_scripts(root):
-        if not path.exists():
-            click.echo(f"{name:<{col}}  [missing source: {path}]", err=True)
-            continue
-
         if kind == "bash":
             desc, missing = _bash_description(path)
-        else:
+        elif path.exists():
             desc, missing = _python_description(f"tools.{path.stem}", fn)
+        else:
+            desc, missing = _external_description(name)
 
         click.echo(f"{name:<{col}}  {desc if desc else '[missing]'}")
