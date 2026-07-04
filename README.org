@@ -45,7 +45,6 @@ Each tool has help (=-h/--help= options) and a summary of all tools is available
 uv run tools summary
 #+end_src
 
-#+RESULTS:
 #+begin_example
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 clones                  Manage git repository clones across local and remote hosts.
