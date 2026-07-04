@@ -1,8 +1,5 @@
 {
-    "miageru": "Add your description here",
-    "titome": "Add your description here",
-    "herbie": "Add your description here",
-    "passdb": "Add your description here",
+    "kitty-agent-title": "Set Kitty terminal tab content from agents",
     "wcpy": "the \"new\" unified, all-in-one wirecell command",
     "wirecell": "alias of wcpy, matching the package name",
     "wirecell-sigproc": "legacy per-module wirecell command: sigproc",
