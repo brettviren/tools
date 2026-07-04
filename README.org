@@ -93,6 +93,8 @@ bwrap-cwd               Run a command inside bwrap with only the CWD and select 
 
 * Auto-reinstall on pull
 
+Caution: this will run custom code as a side effect of git commands.
+
 When developing across several clones (see the =clones= tool), each clone needs
 =uv tool install -e . --upgrade --force= re-run after a pull to expose new or
 changed tools on =$PATH=.  This repo ships git hooks under =.githooks/= that do
@@ -116,4 +118,6 @@ Note: the hooks also fire on the remote side during =clones sync= (which pulls
 over ssh).  If =uv= is not on the non-interactive =$PATH= there, the hook prints
 a notice and skips; adjust the =PATH= fallback in =.githooks/_install= if your
 =uv= lives outside =~/.local/bin=.
+
+The =install-hooks= will also configure smudge filters.
 

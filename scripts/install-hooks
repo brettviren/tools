@@ -39,6 +39,9 @@ _here() {
     chmod +x "$root/$hooks_dir"/* 2>/dev/null
     git -C "$root" config core.hooksPath "$hooks_dir"
     echo "enabled $hooks_dir/ hooks in $root (core.hooksPath=$hooks_dir)"
+    git config filter.orgclean.clean "sed '/^#+RESULTS/d'"
+    git config filter.orgclean.smudge cat
+    echo "enabled smudge filter to work around GitHub's crappy org-mode render"
 }
 
 _all() {
