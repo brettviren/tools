@@ -51,7 +51,6 @@ tools                   Manage the tools package: import scripts, generate compl
 clones                  Manage git repository clones across local and remote hosts.
 manycron                Manage crontab fragments across many accounts.
 time-entry              Monthly time allocator for fiscal-year project reporting.
-claude-status           [missing]
 cmake-examine           Examine CMake-based source packages without modifying them.
 ampersand               Set display background with an image
 miageru                 Add your description here 
