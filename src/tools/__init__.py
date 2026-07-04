@@ -83,6 +83,11 @@ def _inject_copyright(path: Path, kind: str) -> None:
 # ── package helpers ────────────────────────────────────────────────────────────
 
 def _find_root() -> Path:
+    # Editable installs (`uv tool install -e .`) leave __file__ pointing at
+    # the source tree regardless of cwd, so prefer that before walking cwd.
+    pkg_root = Path(__file__).resolve().parent.parent.parent
+    if (pkg_root / "pyproject.toml").exists():
+        return pkg_root
     for p in [Path.cwd(), *Path.cwd().parents]:
         if (p / "pyproject.toml").exists():
             return p
@@ -223,11 +228,11 @@ def _man_dir() -> Path:
 
 
 def _iter_scripts(root: Path):
-    """Yield (name, kind, path, fn) for each registered script, excluding 'tools'.
+    """Yield (name, kind, path, module, fn) for each registered script, excluding 'tools'.
 
-    Python scripts come from [project.scripts]; fn is the entry-point function
-    name parsed from the ep string (e.g. 'cli' from 'tools.clones:cli').
-    Bash scripts come from [tool.setuptools] script-files; fn is None.
+    Python scripts come from [project.scripts]; module/fn are the entry-point
+    spec split on ':' (e.g. 'tools.clones'/'cli' from 'tools.clones:cli').
+    Bash scripts come from [tool.setuptools] script-files; module/fn are None.
     """
     _, doc = _load_pyproject(root)
     for name, ep in doc.get("project", {}).get("scripts", {}).items():
@@ -235,10 +240,10 @@ def _iter_scripts(root: Path):
             continue
         module, fn = ep.rsplit(":", 1)
         mod_leaf = module.split(".")[-1]
-        yield name, "python", root / "src" / "tools" / f"{mod_leaf}.py", fn
+        yield name, "python", root / "src" / "tools" / f"{mod_leaf}.py", module, fn
     for sf in doc.get("tool", {}).get("setuptools", {}).get("script-files", []):
         path = root / sf
-        yield path.name, "bash", path, None
+        yield path.name, "bash", path, None, None
 
 
 # ── PEP 723 helpers ────────────────────────────────────────────────────────────
@@ -334,44 +339,71 @@ def _bundled_summaries() -> dict[str, str]:
     return json.loads(path.read_text())
 
 
-def _dist_summary(name: str) -> str | None:
-    """Return the 'Summary' metadata of the distribution owning console script NAME.
+@functools.lru_cache(maxsize=1)
+def _packages_distributions() -> dict[str, list[str]]:
+    """Cached top-level-import-name → distribution-names mapping.
 
-    Looked up via the installed console_scripts entry point rather than by
-    importing anything, so heavy external packages (torch, scipy, ...) never
-    get imported just to produce a one-line description.
-
-    The "tools" distribution re-declares every bundled command's entry point
-    (that's how 'uv tool install' is made to expose them), so it shows up as
-    a second, spurious match here; it must be excluded to find the real
-    owning package.
+    importlib.metadata.packages_distributions() re-scans every installed
+    distribution's RECORD on each call (~0.3s here, with torch/scipy/PyQt6
+    et al. installed); calling it once per external script made 'summary'
+    take several seconds, so it's memoized for the life of the process.
     """
-    eps = importlib.metadata.entry_points(group="console_scripts", name=name)
-    ep = next((e for e in eps if e.dist and e.dist.name != "tools"), None)
-    if ep is None:
+    return importlib.metadata.packages_distributions()
+
+
+def _dist_summary(module: str) -> str | None:
+    """Return the 'Summary' metadata of the distribution providing MODULE.
+
+    Resolved via the installed package's own top-level-name → distribution
+    mapping (no entry point required, no import), so this works even when
+    the external package registers no console_scripts of its own and simply
+    rides on "tools" own [project.scripts] to get exposed; it also means
+    heavy external packages (torch, scipy, ...) never get imported just to
+    produce a one-line description.
+    """
+    top = module.split(".")[0]
+    dist_names = [
+        d for d in _packages_distributions().get(top, [])
+        if d != "tools"
+    ]
+    if not dist_names:
         return None
-    return (ep.dist.metadata["Summary"] or "").strip() or None
+    try:
+        meta = importlib.metadata.metadata(dist_names[0])
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    return (meta["Summary"] or "").strip() or None
 
 
-def _external_description(name: str) -> tuple[str | None, bool]:
-    """Return (description, needs_llm) for an externally-sourced console script.
+def _with_bundled_fallback(name: str, native: str | None) -> tuple[str | None, bool]:
+    """Apply the bundled_summaries.json fallback/redundancy rule to a NATIVE description.
 
-    Prefers the owning package's own Summary metadata.  When that's empty or
-    the well-known "Add your description here" placeholder, falls back to
-    bundled_summaries.json and appends U+F49B (a reminder to fix the
-    upstream package's metadata).  When metadata is fine but a now-redundant
-    bundled_summaries.json entry still exists for it, appends U+F127 instead
-    (a reminder to delete that stale entry).
+    NATIVE is whatever description the tool's own metadata/docstring/@describe
+    line produced (or None/a placeholder if there wasn't anything useful);
+    see the 'summary' command.  When NATIVE is empty or the well-known "Add
+    your description here" placeholder, falls back to bundled_summaries.json
+    and appends U+F49B (a reminder to fix the upstream metadata instead).
+    When NATIVE is fine but a now-redundant bundled_summaries.json entry
+    still exists for it, appends U+F127 instead (a reminder to delete that
+    stale entry).
     """
-    summary = _dist_summary(name)
-    is_placeholder = not summary or summary.lower() == _PLACEHOLDER_SUMMARY
+    is_placeholder = not native or native.strip().lower() == _PLACEHOLDER_SUMMARY
     cached = _bundled_summaries().get(name)
 
     if is_placeholder:
         return (f"{cached} ", False) if cached else (None, True)
     if cached:
-        return f"{summary} ", False
-    return summary, False
+        return f"{native} ", False
+    return native, False
+
+
+def _external_description(name: str, module: str) -> tuple[str | None, bool]:
+    """Return (description, needs_llm) for an externally-sourced console script.
+
+    See _with_bundled_fallback for the fallback/redundancy rule applied to
+    the owning package's own Summary metadata.
+    """
+    return _with_bundled_fallback(name, _dist_summary(module))
 
 
 # ── description updaters ───────────────────────────────────────────────────────
@@ -644,7 +676,7 @@ def completions(shell: str | None) -> None:
 
     _gen_click_completion("tools", shell, outdir)
 
-    for name, kind, path, _fn in _iter_scripts(root):
+    for name, kind, path, _module, _fn in _iter_scripts(root):
         if kind == "bash":
             _gen_argc_completion(path, shell, name, outdir)
         else:
@@ -665,7 +697,7 @@ def manpages() -> None:
 
     _gen_click_manpage("tools", "tools", "main", outdir)
 
-    for name, kind, path, fn in _iter_scripts(root):
+    for name, kind, path, _module, fn in _iter_scripts(root):
         if kind == "bash":
             _gen_argc_manpage(path, name, outdir)
         else:
@@ -690,14 +722,18 @@ def summary() -> None:
     col = 22
 
     tools_desc = (main.help or "").splitlines()[0].strip()
-    click.echo(f"{'tools':<{col}}  {tools_desc}")
+    rows = [("tools", tools_desc)]
 
-    for name, kind, path, fn in _iter_scripts(root):
+    for name, kind, path, module, fn in _iter_scripts(root):
         if kind == "bash":
-            desc, missing = _bash_description(path)
+            native, _needs_llm = _bash_description(path)
+            desc, missing = _with_bundled_fallback(name, native)
         elif path.exists():
             desc, missing = _python_description(f"tools.{path.stem}", fn)
         else:
-            desc, missing = _external_description(name)
+            desc, missing = _external_description(name, module)
 
-        click.echo(f"{name:<{col}}  {desc if desc else '[missing]'}")
+        rows.append((name, desc if desc else "[missing]"))
+
+    for name, desc in sorted(rows):
+        click.echo(f"{name:<{col}}  {desc}")

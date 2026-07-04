@@ -46,6 +46,7 @@ dependencies = [
     "magic-wormhole",
     "beets[discogs,discog,chroma]",
     "vrdj",                    # beets with (a beets plugin, not its own CLI)
+    "claude-status",
 ]
 
 [project.scripts]
