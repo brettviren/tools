@@ -91,7 +91,6 @@ kitty-agent-title       [missing]
 bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
 #+end_example
 
-
 * Auto-reinstall on pull
 
 When developing across several clones (see the =clones= tool), each clone needs
