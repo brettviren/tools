@@ -23,10 +23,17 @@ def transitive_reduction(adj: dict[str, set[str]]) -> dict[str, set[str]]:
     For each node u, the direct edge u→v is kept only when v is NOT reachable
     from any other direct neighbour of u.  Correct for DAGs; cmake package
     graphs are always acyclic.
+
+    Self-loops (u→u) are discarded up front.  A self-loop is meaningless for a
+    dependency graph and, worse, would make every other neighbour of u appear
+    reachable "via u itself" and thus be wrongly pruned as transitively
+    redundant -- silently dropping u's real dependencies.
     """
+    adj = {u: (targets - {u}) for u, targets in adj.items()}
+
     def descendants(start: str) -> set[str]:
         # Initialise seen with start so it is never added to the result set;
-        # this makes self-loops and any other cycle through start harmless.
+        # this makes any cycle back through start harmless.
         seen: set[str] = {start}
         stack = list(adj.get(start, set()))
         while stack:

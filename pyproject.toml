@@ -14,39 +14,6 @@ dependencies = [
     "click-man>=0.4",
     "playwright",
 
-    # Formerly managed by ~/.config/per/config.toml + the "per" tool.  Each
-    # entry below is a "source" package from that config; a following comment
-    # notes its "with" extras, which are also added as plain dependencies.
-    "ampersand",
-    "miageru",
-    "myougiden",
-    "barpyrus",
-    "xlib",                    # barpyrus with
-    "titome",
-    "pytz",                    # titome with
-    "parsedatetime",           # titome with
-    "herbstluft-herbie",       # PyPI name of the "herbie" package
-    "rephile",
-    "promnesia",
-    "orgparse",                # promnesia with
-    "mistletoe",               # promnesia with
-    "python-magic",            # promnesia with
-    "bs4",                     # promnesia with
-    "HPI",                     # promnesia with
-    "cashew",                  # promnesia with
-    "logzero",                 # promnesia with
-    "orjson",                  # promnesia with
-    "mypy",                    # promnesia with
-    "rexport",                 # promnesia with
-    "wirecell",
-    "dune-people",
-    "wget-spider",
-    "imp",
-    "passdb",
-    "magic-wormhole",
-    "beets[discogs,discog,chroma]",
-    "vrdj",                    # beets with (a beets plugin, not its own CLI)
-    "claude-status",
 ]
 
 [project.scripts]
@@ -55,47 +22,6 @@ clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
 time-entry = "tools.time_entry:main"
 cmake-examine = "tools.cmake_examine:cli"
-
-# Formerly managed by "per" -- see the dependencies list above.
-ampersand = "ampersand.__main__:main"
-miageru = "miageru.__main__:cli"
-myougiden = "myougiden.__main__:main"
-updatedb-myougiden = "myougiden.updatedb:main"
-barpyrus = "barpyrus.mainloop:main"
-titome = "titome.main:main"
-herbie = "herbie.__main__:main"
-rephile = "rephile.__main__:main"
-promnesia = "promnesia.__main__:main"
-wcpy = "wirecell.__main__:main"
-dune-people = "dune_people.__main__:cli"
-wget-spider = "wget_spider.__main__:cli"
-imp = "imp.__main__:cli"
-passdb = "passdb.cli:cli"
-wormhole = "wormhole.cli.cli:wormhole"
-magic-wormhole = "wormhole.cli.cli:wormhole"
-beet = "beets.ui:main"
-claude-status = "claude_status:main"
-
-[tool.uv.sources]
-ampersand = { git = "https://github.com/brettviren/ampersand" }
-miageru = { git = "https://github.com/brettviren/miageru" }
-myougiden = { git = "https://github.com/brettviren/myougiden" }
-barpyrus = { git = "https://github.com/t-wissmann/barpyrus" }
-titome = { git = "https://github.com/brettviren/titome" }
-herbstluft-herbie = { git = "https://github.com/brettviren/herbie" }
-rephile = { git = "https://github.com/brettviren/rephile" }
-promnesia = { git = "https://github.com/karlicoss/promnesia" }
-rexport = { git = "https://github.com/karlicoss/rexport" }
-wirecell = { git = "https://github.com/wirecell/wire-cell-python" }
-dune-people = { git = "https://github.com/brettviren/dune-people" }
-wget-spider = { git = "https://github.com/brettviren/wget-spider" }
-imp = { git = "https://github.com/brettviren/imp" }
-passdb = { git = "https://github.com/brettviren/passdb" }
-vrdj = { git = "https://github.com/brettviren/vrdj" }
-# myougiden's own pyproject pins this fork, but that override only applies
-# when myougiden is the root project, so it must be repeated here.
-romkan = { git = "https://github.com/brettviren/python-romkan" }
-claude-status = { git = "https://github.com/brettviren/claude-status" }
 
 [build-system]
 requires = ["setuptools>=61"]

@@ -238,6 +238,12 @@ def dependency_graph(
                                 fp.add(m.group(1))
                     deps = (deps & fp) | (deps & source_names)
 
+            # A package never depends on itself.  A self-referential
+            # find_package() can arise from bundled stand-alone examples (e.g.
+            # edep-sim's examples/ExternalKinematics does find_package(EDepSim))
+            # which are scanned but are not part of this package's own build.
+            deps = deps - {name}
+
             nodes.append({
                 'name': name,
                 'libs': parse_library_targets(source_path),
