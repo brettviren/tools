@@ -13,6 +13,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# Character class for a CMake name (project, target or package).  CMake allows
+# letters, digits and ``_ . + -`` in these names, so ``\w`` alone is wrong: it
+# truncates e.g. ``edep-simphony-plugin`` to ``edep`` at the first dash.
+_NAME = r'[\w.+-]+'
+
 
 @dataclass
 class Option:
@@ -88,7 +93,7 @@ def project_name(source_path: Path) -> str:
             text = _strip_comments(f.read_text(errors='replace'))
         except OSError:
             continue
-        m = re.search(r'(?i)\bproject\s*\(\s*(\w+)', text)
+        m = re.search(rf'(?i)\bproject\s*\(\s*({_NAME})', text)
         if m:
             return m.group(1)
     return source_path.name
@@ -115,7 +120,7 @@ def parse_find_packages(source_path: Path) -> set[str]:
             text = _strip_comments(f.read_text(errors='replace'))
         except OSError:
             continue
-        found.update(re.findall(r'(?i)\bfind_package\s*\(\s*(\w+)', text))
+        found.update(re.findall(rf'(?i)\bfind_package\s*\(\s*({_NAME})', text))
     return found
 
 
@@ -134,7 +139,7 @@ def parse_library_targets(source_path: Path) -> list[str]:
         except OSError:
             continue
         for m in re.finditer(
-            r'(?i)\badd_library\s*\(\s*(\w+)\s+'
+            rf'(?i)\badd_library\s*\(\s*({_NAME})\s+'
             r'(SHARED|STATIC|INTERFACE|OBJECT|MODULE)\b',
             text,
         ):
@@ -168,14 +173,14 @@ def found_packages(
 
     pkgs: set[str] = set()
     for line in res.stdout.splitlines():
-        m = re.match(r'--\s+Found\s+(\w+)\s*[:.]', line)
+        m = re.match(rf'--\s+Found\s+({_NAME})\s*[:.]', line)
         if m:
             pkgs.add(m.group(1))
 
     cache = Path(build_dir) / 'CMakeCache.txt'
     if cache.exists():
         for line in cache.read_text(errors='replace').splitlines():
-            m = re.match(r'(\w+)_FOUND(?::\w+)?=(.+)', line.strip())
+            m = re.match(rf'({_NAME})_FOUND(?::\w+)?=(.+)', line.strip())
             if m and m.group(2).strip().upper() in ('TRUE', '1', 'YES', 'ON'):
                 pkgs.add(m.group(1))
 
@@ -232,7 +237,7 @@ def dependency_graph(
                     cache = Path(build_dir) / 'CMakeCache.txt'
                     if cache.exists():
                         for line in cache.read_text(errors='replace').splitlines():
-                            m = re.match(r'(\w+)_DIR(?::\w+)?=(.+)', line.strip())
+                            m = re.match(rf'({_NAME})_DIR(?::\w+)?=(.+)', line.strip())
                             if m and m.group(2).strip() not in ('', 'NOTFOUND',
                                                                  f'{m.group(1)}_DIR-NOTFOUND'):
                                 fp.add(m.group(1))
