@@ -11,6 +11,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# Node fill colours distinguishing packages named on the command line from
+# those discovered only through find_package() dependencies.
+SOURCE_FILLCOLOR = 'lightblue'
+DEP_FILLCOLOR = 'lightgrey'
+
 
 def escape_string(s: str) -> str:
     """Escape a string for safe use inside a GraphViz double-quoted attribute."""
@@ -59,7 +64,10 @@ def to_dot(nodes: list[dict], reduce: bool = True, show_libs: bool = False) -> s
     Each node dict must have:
       name  – unique identifier string used as the dot node id
       deps  – set of name strings this node depends on
-    An optional ``path`` key is appended as a second line in the node label.
+    A truthy ``source`` key marks a package named on the command line; such
+    nodes are filled with ``SOURCE_FILLCOLOR`` while packages discovered only
+    through dependencies (present solely as edge targets, with no node dict)
+    inherit the default ``DEP_FILLCOLOR`` node style.
 
     When *reduce* is True (the default), transitive reduction is applied
     before emitting edges so that edges implied by longer paths are omitted.
@@ -70,7 +78,7 @@ def to_dot(nodes: list[dict], reduce: bool = True, show_libs: bool = False) -> s
     lines = [
         'digraph cmake_deps {',
         '    rankdir=LR;',
-        '    node [shape=box, style=filled, fillcolor=lightblue];',
+        f'    node [shape=box, style=filled, fillcolor={DEP_FILLCOLOR}];',
         '',
     ]
     for n in nodes:
@@ -83,7 +91,10 @@ def to_dot(nodes: list[dict], reduce: bool = True, show_libs: bool = False) -> s
             for lib in n.get('libs', []):
                 parts.append(escape_string(lib))
         label = r'\n'.join(parts)
-        lines.append(f'    "{node_id}" [label="{label}"];')
+        # Command-line packages get a distinct fill; dependency-only packages
+        # are never emitted here and so keep the default node fillcolor.
+        fill = f', fillcolor={SOURCE_FILLCOLOR}' if n.get('source') else ''
+        lines.append(f'    "{node_id}" [label="{label}"{fill}];')
     lines.append('')
     for n in nodes:
         src = n['name']

@@ -6,10 +6,12 @@
 #
 # A profile is a shell file at ~/.config/bwrap-cwd/<profile>.sh that may set:
 #   BWRAP_RW   array of paths to additionally bind read-write
+#   BWRAP_DEV  array of device files to bind with --dev-bind (e.g. GPU devices)
 #   BWRAP_CMD  array holding the command line to run (default: bash)
-# Both are optional.
+# All are optional.
 # @option -p --profile <name>   Profile resolving to ~/.config/bwrap-cwd/<name>.sh
 # @option -b --bind* <path>     Extra path to bind read-write (repeatable)
+# @option -d --dev-bind* <path> Extra device file to --dev-bind (repeatable)
 # @arg cmd*                     Command line to run (default: bash)
 
 set -euo pipefail
@@ -24,10 +26,14 @@ _load_profile() {
     source "$file"
 }
 
-# Build and exec the bwrap invocation given the read-write binds and command.
+# Build and exec the bwrap invocation given the read-write binds, device binds
+# and command.  Arguments are the read-write binds, then "--dev--", then the
+# device binds, then "--", then the command line.
 _run() {
-    local -a binds=() cmd=()
-    while [[ "$1" != "--" ]]; do binds+=("$1"); shift; done
+    local -a binds=() devs=() cmd=()
+    while [[ "$1" != "--dev--" ]]; do binds+=("$1"); shift; done
+    shift
+    while [[ "$1" != "--" ]]; do devs+=("$1"); shift; done
     shift
     cmd=("$@")
 
@@ -40,12 +46,15 @@ _run() {
     for p in "${binds[@]}"; do
         args+=(--bind "$p" "$p")
     done
+    for p in "${devs[@]}"; do
+        args+=(--dev-bind "$p" "$p")
+    done
 
     exec bwrap "${args[@]}" -- "${cmd[@]}"
 }
 
 main() {
-    local -a BWRAP_RW=() BWRAP_CMD=()
+    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
     [[ -n "${argc_profile:-}" ]] && _load_profile "$argc_profile"
 
     # Read-write binds: fixed defaults, then profile, then -b options.
@@ -60,6 +69,10 @@ main() {
     binds+=("${BWRAP_RW[@]}")
     [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
 
+    # Device binds: profile BWRAP_DEV, then -d options.
+    local -a devs=("${BWRAP_DEV[@]}")
+    [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
+
     # Command precedence: positional args, then profile BWRAP_CMD, then bash.
     local -a cmd
     if [[ -n "${argc_cmd[*]:-}" ]]; then
@@ -70,7 +83,7 @@ main() {
         cmd=(bash)
     fi
 
-    _run "${binds[@]}" -- "${cmd[@]}"
+    _run "${binds[@]}" --dev-- "${devs[@]}" -- "${cmd[@]}"
 }
 
 eval "$(argc --argc-eval "$0" "$@")"

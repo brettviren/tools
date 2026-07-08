@@ -195,9 +195,12 @@ def dependency_graph(
     """Return a node list describing the package-level dependency graph.
 
     Each node is a dict with keys:
-      name  – cmake project name (or directory name as fallback)
-      libs  – library targets produced by this package
-      deps  – set of package-name strings this project depends on
+      name   – cmake project name (or directory name as fallback)
+      libs   – library targets produced by this package
+      deps   – set of package-name strings this project depends on
+      source – True; every node in this list is a package named on the
+               command line (dependency-only packages appear solely as
+               edge targets and have no node dict)
 
     Deps are always taken from parsing ``find_package()`` calls across the
     source tree.  cmake's stdout cannot be used to filter external deps
@@ -253,5 +256,6 @@ def dependency_graph(
                 'name': name,
                 'libs': parse_library_targets(source_path),
                 'deps': deps,
+                'source': True,
             })
     return nodes
