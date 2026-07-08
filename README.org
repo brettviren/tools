@@ -4,9 +4,11 @@ This repo collects tools I use, most of which I've written, and installs them in
 
 - Shell (usually bash) scripts (under [[file:scripts/]])
 - Python modules with CLI entry points directly implemented in this package.
-- Python CLI entry points from their own packages added as dependencies.
 
 Use of this package is intended just for me but others are free to use it according to its [[file:LICENSE][GPLv3+]] licensing.  
+
+See also my [[https://github.com/brettviren/per][per]] package which aggregates multiple individual packages via =uv=.
+I'm still looking for a better story for that functionality.
 
 * Install
 
@@ -45,51 +47,22 @@ Each tool has help (=-h/--help= options) and a summary of all tools is available
 uv run tools summary
 #+end_src
 
+#+RESULTS:
 #+begin_example
-tools                   Manage the tools package: import scripts, generate completions and man pages.
+bee                     Upload data to the BEE event-visualization server
+bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
+claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
 clones                  Manage git repository clones across local and remote hosts.
+cmake-examine           Examine CMake-based source packages without modifying them.
+down                    Search for files or content using fzf-powered selection.
+kfz                     kitty split fuzzy file browser with icat/batcat preview
+kitty-agent-title       Set Kitty terminal tab content from agents 
 manycron                Manage crontab fragments across many accounts.
 time-entry              Monthly time allocator for fiscal-year project reporting.
-cmake-examine           Examine CMake-based source packages without modifying them.
-ampersand               Set display background with an image
-miageru                 Add your description here 
-myougiden               A Japanese/English dictionary for the command line.
-updatedb-myougiden      A Japanese/English dictionary for the command line.
-barpyrus                A python wrapper for lemonbar/conky
-titome                  Add your description here 
-herbie                  Add your description here 
-rephile                 CLI and Python modules to organize files, particularly photos using git-annex for storage
-promnesia               Enhancement of your browsing history
-wcpy                    the "new" unified, all-in-one wirecell command 
-wirecell                alias of wcpy, matching the package name 
-wirecell-sigproc        legacy per-module wirecell command: sigproc 
-wirecell-util           legacy per-module wirecell command: util 
-wirecell-gen            legacy per-module wirecell command: gen 
-wirecell-pgraph         legacy per-module wirecell command: pgraph 
-wirecell-resp           legacy per-module wirecell command: resp 
-wirecell-plot           legacy per-module wirecell command: plot 
-wirecell-aux            legacy per-module wirecell command: aux 
-wirecell-ls4gan         legacy per-module wirecell command: ls4gan 
-wirecell-validate       legacy per-module wirecell command: validate 
-wirecell-img            legacy per-module wirecell command: img 
-wirecell-test           legacy per-module wirecell command: test 
-wirecell-bee            legacy per-module wirecell command: bee 
-wirecell-dnn            legacy per-module wirecell command: dnn (needs the torch extra) 
-wirecell-pytorch        legacy per-module wirecell command: pytorch (needs the torch extra) 
-dune-people             Command line access and cache of DUNE CollabDB
-wget-spider             Crawl URLs and store the URLs found for later lookup
-imp                     There are many screenshot programs and this one is mine.
-passdb                  Add your description here 
-wormhole                Securely transfer data between computers
-magic-wormhole          Securely transfer data between computers
-beet                    music tagger and library organizer
-kfz                     kitty split fuzzy file browser with icat/batcat preview
-claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
-down                    Search for files or content using fzf-powered selection.
-bee                     Upload data to the BEE event-visualization server
-kitty-agent-title       [missing]
-bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
+tools                   Manage the tools package: import scripts, generate completions and man pages.
 #+end_example
+
+
 
 * Auto-reinstall on pull
 
