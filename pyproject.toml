@@ -22,6 +22,7 @@ clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
 time-entry = "tools.time_entry:main"
 cmake-examine = "tools.cmake_examine:cli"
+bds = "tools.bds:cli"
 
 [build-system]
 requires = ["setuptools>=61"]
