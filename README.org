@@ -47,7 +47,6 @@ Each tool has help (=-h/--help= options) and a summary of all tools is available
 uv run tools summary
 #+end_src
 
-#+RESULTS:
 #+begin_example
 bee                     Upload data to the BEE event-visualization server
 bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
