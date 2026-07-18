@@ -9,7 +9,17 @@
 #   BWRAP_DEV  array of device files to bind with --dev-bind (e.g. GPU devices)
 #   BWRAP_CMD  array holding the command line to run (default: bash)
 # All are optional.
-# @option -p --profile <name>   Profile resolving to ~/.config/bwrap-cwd/<name>.sh
+#
+# -p/--profile may be given multiple times. Also, any file named .bwrap-cwd
+# found by searching from the current directory up to the root is sourced;
+# it may set the same BWRAP_RW/BWRAP_DEV/BWRAP_CMD variables as a profile.
+# Sources are applied in this order: each --profile in the order given on
+# the command line, then each found .bwrap-cwd file starting with the one
+# nearest the root and ending with the one nearest the current directory
+# (so a .bwrap-cwd file always wins over a --profile, and one nearer the
+# current directory wins over one nearer the root). -b/-d options are
+# appended last and so take final precedence for the binds they add.
+# @option -p --profile* <name>  Profile resolving to ~/.config/bwrap-cwd/<name>.sh (repeatable)
 # @option -b --bind* <path>     Extra path to bind read-write (repeatable)
 # @option -d --dev-bind* <path> Extra device file to --dev-bind (repeatable)
 # @arg cmd*                     Command line to run (default: bash)
@@ -18,12 +28,28 @@ set -euo pipefail
 
 config_dir=~/.config/bwrap-cwd
 
-# Source a profile file, populating BWRAP_RW and/or BWRAP_CMD.
-_load_profile() {
-    local file="$config_dir/$1.sh"
-    [[ -f "$file" ]] || { echo "bwrap-cwd: no such profile: $file" >&2; exit 1; }
+# Source a config file, populating BWRAP_RW, BWRAP_DEV and/or BWRAP_CMD.
+# Caller is expected to reset those arrays first; source itself only
+# ever assigns them (never appends), matching existing profile files.
+_load_config() {
+    local file="$1"
+    [[ -f "$file" ]] || { echo "bwrap-cwd: no such config file: $file" >&2; exit 1; }
     # shellcheck disable=SC1090
     source "$file"
+}
+
+# Find .bwrap-cwd files from $PWD up to /, populating the named array
+# (nameref) with results ordered from the root-most match to the
+# cwd-most match.
+_find_dotfiles() {
+    local -n _found="$1"
+    _found=()
+    local dir="$PWD"
+    while true; do
+        [[ -f "$dir/.bwrap-cwd" ]] && _found=("$dir/.bwrap-cwd" "${_found[@]}")
+        [[ "$dir" == "/" ]] && break
+        dir="$(dirname "$dir")"
+    done
 }
 
 # Build and exec the bwrap invocation given the read-write binds, device binds
@@ -55,10 +81,10 @@ _run() {
 
 main() {
     local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
-    [[ -n "${argc_profile:-}" ]] && _load_profile "$argc_profile"
+    local -a binds=() devs=() cmd=()
 
-    # Read-write binds: fixed defaults, then profile, then -b options.
-    local -a binds=(
+    # Fixed default read-write binds.
+    binds=(
         "$PWD"
         /tmp
         ~/.cache
@@ -66,20 +92,39 @@ main() {
     # Temp dirs from the calling environment, if set.
     [[ -n "${TEMP:-}" ]] && binds+=("$TEMP")
     [[ -n "${TMPDIR:-}" ]] && binds+=("$TMPDIR")
-    binds+=("${BWRAP_RW[@]}")
-    [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
 
-    # Device binds: profile BWRAP_DEV, then -d options.
-    local -a devs=("${BWRAP_DEV[@]}")
+    # 1. Each --profile, in the order given on the command line.
+    if [[ -n "${argc_profile[*]:-}" ]]; then
+        local name
+        for name in "${argc_profile[@]}"; do
+            BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+            _load_config "$config_dir/$name.sh"
+            binds+=("${BWRAP_RW[@]}")
+            devs+=("${BWRAP_DEV[@]}")
+            [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
+        done
+    fi
+
+    # 2. Each .bwrap-cwd file found from $PWD to /, root-most first.
+    local -a dotfiles
+    _find_dotfiles dotfiles
+    local file
+    for file in "${dotfiles[@]}"; do
+        BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+        _load_config "$file"
+        binds+=("${BWRAP_RW[@]}")
+        devs+=("${BWRAP_DEV[@]}")
+        [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
+    done
+
+    # 3. Append -b/-d command line options last.
+    [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
     [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
 
-    # Command precedence: positional args, then profile BWRAP_CMD, then bash.
-    local -a cmd
+    # Command precedence: positional args, then last BWRAP_CMD seen above, then bash.
     if [[ -n "${argc_cmd[*]:-}" ]]; then
         cmd=("${argc_cmd[@]}")
-    elif [[ -n "${BWRAP_CMD[*]:-}" ]]; then
-        cmd=("${BWRAP_CMD[@]}")
-    else
+    elif [[ -z "${cmd[*]:-}" ]]; then
         cmd=(bash)
     fi
 

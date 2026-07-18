@@ -1,0 +1,2 @@
+# Further open up my config area since we often tweak it when tweaking the tools
+BWRAP_RW+=( ~/.config )

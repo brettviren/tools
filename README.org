@@ -1,19 +1,18 @@
 #+title: Some tools
 
-This repo collects tools I use, most of which I've written, and installs them in one lump.  The tools fall into these categories:
+This repo collects some opinionated tools I've written to make my life just a little easier.  The tools fall into these categories:
 
 - Shell (usually bash) scripts (under [[file:scripts/]])
-- Python modules with CLI entry points directly implemented in this package.
+- Python modules with CLI entry points (under [[file:src/tools/]])
 
-Use of this package is intended just for me but others are free to use it according to its [[file:LICENSE][GPLv3+]] licensing.  
+This package is written for my use, but others are free to use it according to its [[file:LICENSE][GPLv3+]] licensing.  I am receptive to bug fixes and extending functionality with good ideas but reserve the right to ignore input on a case-by-case basis.  If you use this package, see also the section [[Cautions]].
 
-See also my [[https://github.com/brettviren/per][per]] package which aggregates multiple individual packages via =uv=.
-I'm still looking for a better story for that functionality.
+I also have a [[https://github.com/brettviren/per][per]] package that aggregates multiple individual packages via =uv=, including many I developed but which are too "big" to simply be a part of =tools=.
 
 * Install
 
 #+begin_center
-Beware, this package has nothing to do with the [[https://pypi.org/project/tools/]["tools" package on PyPI]].
+*Beware, this package has nothing to do with the [[https://pypi.org/project/tools/]["tools" package on PyPI]].*
 #+end_center
 
 As an end-user:
@@ -28,18 +27,18 @@ git clone git@github.com:brettviren/tools.git
 cd tools
 uv tools install -e .
 uv tools install -e --upgrade --force
-uv run tools [...]
+tools [...]
 #+end_example
+See also =install-hooks= under [[Cautions]].
 
-* Basic use
-
-
-Install man pages and completions
+Optionally, install man pages and completions:
 
 #+begin_example
 $ tools manpages     # May need to add to your MANPATH
 $ tools completions  # Tested on fish, your shell mileage may vary
 #+end_example
+
+* Basic use
 
 Each tool has help (=-h/--help= options) and a summary of all tools is available:
 
@@ -48,6 +47,7 @@ uv run tools summary
 #+end_src
 
 #+begin_example
+bds                     Convenience wrapper around the Beads command `bd`.
 bee                     Upload data to the BEE event-visualization server
 bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
 claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
@@ -55,13 +55,14 @@ clones                  Manage git repository clones across local and remote hos
 cmake-examine           Examine CMake-based source packages without modifying them.
 down                    Search for files or content using fzf-powered selection.
 kfz                     kitty split fuzzy file browser with icat/batcat preview
-kitty-agent-title       Set Kitty terminal tab content from agents
+kitty-agent-title       Set Kitty terminal tab content from agents 
 manycron                Manage crontab fragments across many accounts.
 time-entry              Monthly time allocator for fiscal-year project reporting.
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 #+end_example
 
-* Clones and managing multiple accounts
+
+* Multiple accounts
 
 Some of the tools (clones, manycron) only make sense to use when you have
 multiple user accounts across many computers.  To mange the configuration of
@@ -69,17 +70,24 @@ these tools and various account configurations, using [[https://github.com/richi
 for many years.  In particular =clones= can handle vcsh (and [[https://www.passwordstore.org/][pass]]).  For multiple
 different git clones in one account, take a look at [[https://myrepos.branchable.com/][mr / MyRepos]].
 
-* Auto-reinstall on pull
+* Cautions
 
-Caution: this will run custom code as a side effect of git commands.
+I am not responsible if this package burns down all that you hold dear.  That said, I use these tools daily.  However, my opinion on the "right" way to do things may not match yours.  This section collects potential areas where our differing opinions may be important for you to consider.
+
+** bwrap-cwd policy in source
+
+The [[file:.bwrap-cwd]] in this modify the policy enacted by =bwrap-cwd= when that command is run inside this directory.  These files are location specific and this file is not honored when using =bwrap-cwd= from other.  This file exists only in the source and is not installed.  Run =bwrap-cwd= for more info on how its policy is constructed.
+
+** Auto-reinstall on pull
 
 When developing across several clones (see the =clones= tool), each clone needs
 =uv tool install -e . --upgrade --force= re-run after a pull to expose new or
 changed tools on =$PATH=.  This repo ships git hooks under =.githooks/= that do
 this automatically after a pull touches =pyproject.toml=, =uv.lock= or =src/=.
 
-The hooks are version-controlled, but enabling them sets =core.hooksPath=, which
-is per-clone local config and cannot itself be tracked.  Enable them once:
+The hooks are version-controlled and you must take action to enable them to be
+used.  Enabling them sets =core.hooksPath=, which is per-clone local config and
+cannot itself be tracked.  Enable them with:
 
 #+begin_example
 $ scripts/install-hooks here   # this clone
@@ -97,5 +105,5 @@ over ssh).  If =uv= is not on the non-interactive =$PATH= there, the hook prints
 a notice and skips; adjust the =PATH= fallback in =.githooks/_install= if your
 =uv= lives outside =~/.local/bin=.
 
-The =install-hooks= will also configure smudge filters.
+The =install-hooks= will also configure smudge filters needed to work-around GitHub's imperfect org-mode renderer.
 
