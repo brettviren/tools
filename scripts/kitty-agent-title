@@ -1,65 +1,286 @@
 #!/bin/bash
-
+#
 # see https://flurdy.com/docs/kitty-ai-tabs/
+#
+# Sets the Kitty tab title from Claude Code / Codex agent lifecycle hooks.
+# Commands:
+#   emit     Read a hook JSON payload from stdin and update the tab title.
+#   install  Install lifecycle hooks that call this script's "emit" command.
 
+script_name=$(basename "$0")
 
-AGENT=${1:-agent}
-PAYLOAD=$(cat)
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
 
-json_value() {
-  local key="$1"
-  printf '%s' "$PAYLOAD" | jq -r --arg key "$key" \
+_usage() {
+  cat <<EOF
+Usage: $script_name [-h|--help] <command> [<args>]
+
+Set Kitty tab titles from Claude Code / Codex agent lifecycle hooks.
+
+Commands:
+  emit [agent]      Read a hook JSON payload from stdin and set the Kitty
+                     tab title for <agent> (default: agent).
+  install [agent]   Install lifecycle hooks that call "$script_name emit"
+                     into an agent's settings. <agent> is "claude" or
+                     "codex" (default: claude).
+
+Run '$script_name <command> -h' for command-specific help.
+EOF
+}
+
+_usage_emit() {
+  cat <<EOF
+Usage: $script_name emit [agent]
+
+Read a hook JSON payload from stdin and set the Kitty tab title.
+
+  agent   Name shown in the title (default: agent). "claude" and "codex"
+          get a single-letter marker; anything else is shown as-is.
+EOF
+}
+
+_usage_install() {
+  cat <<EOF
+Usage: $script_name install [-h|--help] [--user] [agent]
+
+Install lifecycle hooks that call "$script_name emit <agent>" into an
+agent's settings, so the Kitty tab title stays up to date.
+
+  agent     "claude" or "codex" (default: claude).
+  --user    Install into the agent's user-scope settings instead of its
+            project settings in the current directory.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# emit: library functions
+# ---------------------------------------------------------------------------
+
+_json_value() {
+  local payload="$1" key="$2"
+  printf '%s' "$payload" | jq -r --arg key "$key" \
     '.[$key] // empty' 2>/dev/null
 }
 
-EVENT=$(json_value hook_event_name)
-CWD=$(json_value cwd)
-[ -z "$CWD" ] && CWD="$PWD"
+_repo_label() {
+  local cwd="$1"
+  local git_root repo
+  git_root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$git_root" ]; then
+    repo=$(basename "$git_root")
+  else
+    repo=$(basename "$cwd")
+  fi
+  printf '%s' "$repo"
+}
 
-GIT_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || true)
-BRANCH=$(git -C "$CWD" branch --show-current 2>/dev/null || true)
+_branch_label() {
+  local cwd="$1"
+  local branch
+  branch=$(git -C "$cwd" branch --show-current 2>/dev/null || true)
+  case "$branch" in
+    main|master|trunk|"") printf '' ;;
+    feature/*|fix/*|bugfix/*|chore/*) printf '%s' "${branch#*/}" ;;
+    *) printf '%s' "$branch" ;;
+  esac
+}
 
-if [ -n "$GIT_ROOT" ]; then
-  REPO=$(basename "$GIT_ROOT")
-else
-  REPO=$(basename "$CWD")
-fi
+_agent_label() {
+  local agent="$1" repo="$2"
+  case "$agent" in
+    claude) printf 'C %s' "$repo" ;;
+    codex)  printf 'X %s' "$repo" ;;
+    *)      printf '%s %s' "$agent" "$repo" ;;
+  esac
+}
 
-case "$BRANCH" in
-  main|master|trunk|"") BRANCH="" ;;
-  feature/*|fix/*|bugfix/*|chore/*) BRANCH=${BRANCH#*/} ;;
-esac
+_event_mark() {
+  local event="$1"
+  case "$event" in
+    SessionStart)                  printf '🌱' ;;
+    UserPromptSubmit|PostToolUse)  printf '💭' ;;
+    PreToolUse)                    printf '⚙' ;;
+    PermissionRequest)             printf '❓' ;;
+    Stop|SubagentStop)             printf '✔' ;;
+    PreCompact|PostCompact)        printf '🧹' ;;
+    *)                             printf '' ;;
+  esac
+}
 
-case "$AGENT" in
-  claude) LABEL="C $REPO" ;;
-  codex)  LABEL="X $REPO" ;;
-  *)      LABEL="$AGENT $REPO" ;;
-esac
+_set_kitty_title() {
+  local title="$1"
+  if command -v kitten >/dev/null 2>&1; then
+    kitten @ set-tab-title "$title" >/dev/null 2>&1 \
+      || kitten @ set-tab-title "$title" >/dev/null 2>&1 \
+      || true
+  else
+    # Fallback to terminal title escape sequences.
+    (
+      exec 2>/dev/null
+      printf '\e]30;%s\a' "$title" > /dev/tty || true
+      printf '\e]2;%s\a' "$title" > /dev/tty || true
+    ) || true
+  fi
+}
 
-[ -n "$BRANCH" ] && LABEL="$LABEL/$BRANCH"
+_emit() {
+  local agent="$1" payload="$2"
+  local event cwd repo branch label mark title
 
-case "$EVENT" in
-  SessionStart)                  MARK="🌱" ;;
-  UserPromptSubmit|PostToolUse)  MARK="💭" ;;
-  PreToolUse)                    MARK="⚙" ;;
-  PermissionRequest)             MARK="❓" ;;
-  Stop|SubagentStop)             MARK="✔" ;;
-  PreCompact|PostCompact)        MARK="🧹" ;;
-  *)                             MARK="" ;;
-esac
+  event=$(_json_value "$payload" hook_event_name)
+  cwd=$(_json_value "$payload" cwd)
+  [ -z "$cwd" ] && cwd="$PWD"
 
-TITLE="$LABEL"
-[ -n "$MARK" ] && TITLE="$TITLE $MARK"
+  repo=$(_repo_label "$cwd")
+  branch=$(_branch_label "$cwd")
+  label=$(_agent_label "$agent" "$repo")
+  [ -n "$branch" ] && label="$label/$branch"
 
-if command -v kitten >/dev/null 2>&1; then
-  kitten @ set-tab-title "$TITLE" >/dev/null 2>&1 \
-    || kitten @ set-tab-title "$TITLE" >/dev/null 2>&1 \
-    || true
-fi
+  mark=$(_event_mark "$event")
+  title="$label"
+  [ -n "$mark" ] && title="$title $mark"
 
-# Fallback to terminal title escape sequences.
-(
-  exec 2>/dev/null
-  printf '\e]30;%s\a' "$TITLE" > /dev/tty || true
-  printf '\e]2;%s\a' "$TITLE" > /dev/tty || true
-) || true
+  _set_kitty_title "$title"
+}
+
+# ---------------------------------------------------------------------------
+# install: library functions
+# ---------------------------------------------------------------------------
+
+# Events that carry a tool matcher.
+_install_matcher_events() { printf '%s\n' PreToolUse PostToolUse PermissionRequest; }
+# Events with no matcher.
+_install_plain_events() { printf '%s\n' SessionStart UserPromptSubmit Stop SubagentStop PreCompact PostCompact; }
+
+_script_path() {
+  readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0"
+}
+
+_settings_file() {
+  local agent="$1" scope="$2" base
+  base="$PWD"
+  [ "$scope" = user ] && base="$HOME"
+  case "$agent" in
+    claude) printf '%s/.claude/settings.json' "$base" ;;
+    codex)  printf '%s/.codex/hooks.json' "$base" ;;
+    *)      printf 'unsupported agent: %s\n' "$agent" >&2; return 1 ;;
+  esac
+}
+
+_build_hook_group() {
+  local matcher="$1" cmd="$2" timeout="$3"
+  jq -n --arg matcher "$matcher" --arg cmd "$cmd" --arg timeout "$timeout" '
+    (if $matcher != "" then {matcher: $matcher} else {} end)
+    + {hooks: [
+        ({type: "command", command: $cmd}
+         + (if $timeout != "" then {timeout: ($timeout | tonumber)} else {} end))
+      ]}
+  '
+}
+
+_merge_hook_event() {
+  local event="$1" cmd="$2" group_json="$3"
+  jq --arg event "$event" --arg cmd "$cmd" --argjson group "$group_json" '
+    .hooks[$event] //= [] |
+    if ([.hooks[$event][]?.hooks[]?.command] | index($cmd)) then
+      .
+    else
+      .hooks[$event] += [$group]
+    end
+  '
+}
+
+_install() {
+  local agent="$1" scope="$2"
+  local script_path settings_file cmd timeout event group_json result tmp
+
+  script_path=$(_script_path)
+  settings_file=$(_settings_file "$agent" "$scope") || return 1
+  cmd="$script_path emit $agent"
+  timeout=""
+  [ "$agent" = codex ] && timeout=5
+
+  mkdir -p "$(dirname "$settings_file")"
+
+  if [ -s "$settings_file" ]; then
+    if ! jq -e . "$settings_file" >/dev/null 2>&1; then
+      printf '%s: not valid JSON, refusing to modify\n' "$settings_file" >&2
+      return 1
+    fi
+    result=$(cat "$settings_file")
+  else
+    result='{}'
+  fi
+
+  while IFS= read -r event; do
+    group_json=$(_build_hook_group '*' "$cmd" "$timeout")
+    result=$(printf '%s' "$result" | _merge_hook_event "$event" "$cmd" "$group_json")
+  done < <(_install_matcher_events)
+
+  while IFS= read -r event; do
+    group_json=$(_build_hook_group '' "$cmd" "$timeout")
+    result=$(printf '%s' "$result" | _merge_hook_event "$event" "$cmd" "$group_json")
+  done < <(_install_plain_events)
+
+  tmp=$(mktemp "${settings_file}.XXXXXX")
+  printf '%s' "$result" | jq '.' > "$tmp"
+  mv "$tmp" "$settings_file"
+
+  printf 'Installed %s hooks into %s\n' "$agent" "$settings_file"
+}
+
+# ---------------------------------------------------------------------------
+# subcommands
+# ---------------------------------------------------------------------------
+
+emit() {
+  case "${1:-}" in
+    -h|--help) _usage_emit; exit 0 ;;
+  esac
+  local agent="${1:-agent}"
+  local payload
+  payload=$(cat)
+  _emit "$agent" "$payload"
+}
+
+install() {
+  local agent="claude" scope="cwd"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) _usage_install; exit 0 ;;
+      --user) scope="user"; shift ;;
+      -*) printf 'unknown option: %s\n' "$1" >&2; _usage_install >&2; exit 1 ;;
+      *) agent="$1"; shift ;;
+    esac
+  done
+
+  case "$agent" in
+    claude|codex) ;;
+    *) printf 'unsupported agent: %s (expected "claude" or "codex")\n' "$agent" >&2; exit 1 ;;
+  esac
+
+  _install "$agent" "$scope"
+}
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+
+main() {
+  case "${1:-}" in
+    ""|-h|--help) _usage; exit 0 ;;
+  esac
+
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    emit) emit "$@" ;;
+    install) install "$@" ;;
+    *) printf 'unknown command: %s\n' "$cmd" >&2; _usage >&2; exit 1 ;;
+  esac
+}
+
+main "$@"
