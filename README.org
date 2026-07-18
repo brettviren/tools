@@ -55,13 +55,19 @@ clones                  Manage git repository clones across local and remote hos
 cmake-examine           Examine CMake-based source packages without modifying them.
 down                    Search for files or content using fzf-powered selection.
 kfz                     kitty split fuzzy file browser with icat/batcat preview
-kitty-agent-title       Set Kitty terminal tab content from agents 
+kitty-agent-title       Set Kitty terminal tab content from agents
 manycron                Manage crontab fragments across many accounts.
 time-entry              Monthly time allocator for fiscal-year project reporting.
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 #+end_example
 
+* Clones and managing multiple accounts
 
+Some of the tools (clones, manycron) only make sense to use when you have
+multiple user accounts across many computers.  To mange the configuration of
+these tools and various account configurations, using [[https://github.com/richih/vcsh][vcsh]] has served me well
+for many years.  In particular =clones= can handle vcsh (and [[https://www.passwordstore.org/][pass]]).  For multiple
+different git clones in one account, take a look at [[https://myrepos.branchable.com/][mr / MyRepos]].
 
 * Auto-reinstall on pull
 
