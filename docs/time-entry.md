@@ -12,14 +12,27 @@ hard-won DOM knowledge so we don't rediscover it.
 
 ## 1. What the script does today
 
+This uses playwright to let Python run a browser as a puppet.  To get started you will need:
+```
+uvx playwright install
+```
+
+The main workflow is:
+
+1. login
+2. plan
+3. diff
+4. apply
+
+
 `time-entry` (a `uv run` single-file script, dep: `playwright`) is a fiscal-year
 project-time allocator + Workday automator. Commands:
 
+- `login` — open a real Chromium (headful), let the user do BNL SSO + DUO, save
+  `storage_state` to `time-entry-auth.json`.
 - `plan [YYYY-MM]` — compute & save a Hamilton/largest-remainder allocation of
   working days to projects; store in `time-entry.json`.
 - `show` / `status` — display the plan / FY-to-date totals.
-- `login` — open a real Chromium (headful), let the user do BNL SSO + DUO, save
-  `storage_state` to `time-entry-auth.json`.
 - `get [YYYY-MM]` — scrape the Workday calendar (read-only) for a month.
 - `diff [YYYY-MM]` — compare plan vs Workday, write `time-entry-diff-YYYY-MM.json`
   (the list of `DayChange`s = days needing entry).
