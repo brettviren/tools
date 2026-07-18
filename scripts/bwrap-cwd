@@ -19,6 +19,22 @@
 # (so a .bwrap-cwd file always wins over a --profile, and one nearer the
 # current directory wins over one nearer the root). -b/-d options are
 # appended last and so take final precedence for the binds they add.
+#
+# If BWRAP_CWD_CLAUDE_HINT ends up defined (set in the calling shell, a
+# profile, or a .bwrap-cwd file) its value is registered as additional
+# context for Claude Code, via a SessionStart hook added to the local
+# ./.claude/settings.json (any existing settings are preserved; only a
+# hook entry pointing at ./.claude/hooks/bwrap-cwd-hint.sh is added or
+# refreshed). Just before the command is run, the hint text is expanded
+# with envsubst, so it may reference BWRAP_CWD_RW and BWRAP_CWD_DEV (the
+# final, comma-separated read-write and device bind lists) as well as
+# any other variable exported by a profile or .bwrap-cwd file. A "$name"
+# or "${name}" reference to an unset variable expands to an empty string;
+# a "$" not forming such a reference (not followed by a name) passes
+# through unchanged. Requires jq and envsubst.
+#
+# `claude` is a group of Claude Code integration helpers; see its own
+# subcommands (e.g. `claude hint`) for details.
 # @option -p --profile* <name>  Profile resolving to ~/.config/bwrap-cwd/<name>.sh (repeatable)
 # @option -b --bind* <path>     Extra path to bind read-write (repeatable)
 # @option -d --dev-bind* <path> Extra device file to --dev-bind (repeatable)
@@ -31,16 +47,25 @@ config_dir=~/.config/bwrap-cwd
 # Source a config file, populating BWRAP_RW, BWRAP_DEV and/or BWRAP_CMD.
 # Caller is expected to reset those arrays first; source itself only
 # ever assigns them (never appends), matching existing profile files.
+# Always returns 0 on success: under `set -e`, a bare (unguarded) call to
+# this function would otherwise abort the whole script whenever the
+# sourced file's own last command happens to evaluate false.
 _load_config() {
     local file="$1"
     [[ -f "$file" ]] || { echo "bwrap-cwd: no such config file: $file" >&2; exit 1; }
     # shellcheck disable=SC1090
     source "$file"
+    return 0
 }
 
 # Find .bwrap-cwd files from $PWD up to /, populating the named array
 # (nameref) with results ordered from the root-most match to the
-# cwd-most match.
+# cwd-most match. Walks the logical path (symlinks unresolved): which
+# .bwrap-cwd files apply is a trust decision the user made explicitly by
+# choosing where to place symlinks, and that logical tree is the one
+# they'll expect to be consulted -- the physical tree is an implementation
+# detail bwrap needs for bind mounts, resolved separately in
+# _build_binds via _canonicalize.
 _find_dotfiles() {
     local -n _found="$1"
     _found=()
@@ -50,6 +75,137 @@ _find_dotfiles() {
         [[ "$dir" == "/" ]] && break
         dir="$(dirname "$dir")"
     done
+}
+
+# Canonicalize each path in the named array (nameref) in place via
+# realpath. Every path here ends up as both the source and destination of
+# a bwrap --bind/--dev-bind, mounted on top of an outer "--ro-bind / /".
+# If a path still contains a symlink component, bwrap's mkdir of the
+# mount point resolves through that symlink onto the read-only outer
+# mount and fails -- so nothing symlinked may reach _run().
+_canonicalize() {
+    local -n _paths="$1"
+    local i
+    for i in "${!_paths[@]}"; do
+        _paths[i]="$(realpath -- "${_paths[i]}")"
+    done
+    return 0
+}
+
+# Join arguments with a separator string.
+_join() {
+    local sep="$1"; shift
+    local out="" p
+    for p in "$@"; do
+        [[ -z "$out" ]] && out="$p" || out+="$sep$p"
+    done
+    printf '%s' "$out"
+}
+
+# Source each --profile (in the order given), then each found .bwrap-cwd
+# file (root-most first, cwd-most last), appending their BWRAP_RW/BWRAP_DEV
+# into the caller's `binds`/`devs` arrays and letting BWRAP_CMD, if any,
+# overwrite the caller's `cmd` array. Caller must have declared
+# BWRAP_RW/BWRAP_DEV/BWRAP_CMD and binds/devs/cmd as local arrays.
+# Always returns 0: see _load_config for why a deterministic return
+# matters when this is called bare (unguarded) elsewhere.
+_gather_config() {
+    if [[ -n "${argc_profile[*]:-}" ]]; then
+        local name
+        for name in "${argc_profile[@]}"; do
+            BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+            _load_config "$config_dir/$name.sh"
+            binds+=("${BWRAP_RW[@]}")
+            devs+=("${BWRAP_DEV[@]}")
+            [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
+        done
+    fi
+
+    local -a dotfiles
+    _find_dotfiles dotfiles
+    local file
+    for file in "${dotfiles[@]}"; do
+        BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+        _load_config "$file"
+        binds+=("${BWRAP_RW[@]}")
+        devs+=("${BWRAP_DEV[@]}")
+        [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
+    done
+    return 0
+}
+
+# Populate the caller's `binds`/`devs` arrays: fixed default binds, then
+# _gather_config's contribution, then any -b/-d command line options.
+# Caller must have declared BWRAP_RW/BWRAP_DEV/BWRAP_CMD and
+# binds/devs/cmd as local arrays. Always returns 0: see _load_config for
+# why a deterministic return matters when this is called bare (unguarded)
+# elsewhere.
+_build_binds() {
+    binds=(
+        "$PWD"
+        /tmp
+        ~/.cache
+    )
+    # Temp dirs from the calling environment, if set.
+    [[ -n "${TEMP:-}" ]] && binds+=("$TEMP")
+    [[ -n "${TMPDIR:-}" ]] && binds+=("$TMPDIR")
+
+    _gather_config
+
+    [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
+    [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
+
+    _canonicalize binds
+    _canonicalize devs
+    return 0
+}
+
+# If BWRAP_CWD_CLAUDE_HINT is defined by now, export BWRAP_CWD_RW/
+# BWRAP_CWD_DEV from the caller's finalized `binds`/`devs` arrays, expand
+# the hint with envsubst, and print the result. Returns non-zero (no
+# output) if no hint is defined.
+_resolve_hint() {
+    [[ -n "${BWRAP_CWD_CLAUDE_HINT:-}" ]] || return 1
+    export BWRAP_CWD_RW BWRAP_CWD_DEV
+    BWRAP_CWD_RW="$(_join ', ' "${binds[@]}")"
+    BWRAP_CWD_DEV="$(_join ', ' "${devs[@]}")"
+    printf '%s' "$BWRAP_CWD_CLAUDE_HINT" | envsubst
+}
+
+# Regenerate the SessionStart hook script that reports the sandbox's
+# writable paths (and any other exported context) to Claude Code, and
+# make sure it is registered in the local ./.claude/settings.json.
+_write_claude_hint() {
+    local hint="$1"
+    local claude_dir="$PWD/.claude"
+    local hook_script="$claude_dir/hooks/bwrap-cwd-hint.sh"
+    local settings_file="$claude_dir/settings.json"
+
+    mkdir -p "$(dirname "$hook_script")"
+
+    local payload
+    payload="$(jq -n --arg text "$hint" \
+        '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $text}}')"
+    {
+        echo "#!/usr/bin/env bash"
+        echo "# Auto-generated by bwrap-cwd; regenerated on every invocation"
+        echo "# that sets BWRAP_CWD_CLAUDE_HINT. Safe to delete."
+        echo "cat <<'BWRAP_CWD_HOOK_EOF'"
+        printf '%s\n' "$payload"
+        echo "BWRAP_CWD_HOOK_EOF"
+    } > "$hook_script"
+    chmod +x "$hook_script"
+
+    local content
+    content="$( [[ -f "$settings_file" ]] && cat "$settings_file" || echo '{}' )"
+    content="$(jq --arg cmd "$hook_script" '
+        .hooks.SessionStart = (
+            [(.hooks.SessionStart // [])[]
+                | select(((.hooks // []) | map(.command) | index($cmd)) == null)]
+            + [{matcher: "*", hooks: [{type: "command", command: $cmd}]}]
+        )
+    ' <<<"$content")"
+    printf '%s\n' "$content" > "$settings_file"
 }
 
 # Build and exec the bwrap invocation given the read-write binds, device binds
@@ -83,43 +239,7 @@ main() {
     local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
     local -a binds=() devs=() cmd=()
 
-    # Fixed default read-write binds.
-    binds=(
-        "$PWD"
-        /tmp
-        ~/.cache
-    )
-    # Temp dirs from the calling environment, if set.
-    [[ -n "${TEMP:-}" ]] && binds+=("$TEMP")
-    [[ -n "${TMPDIR:-}" ]] && binds+=("$TMPDIR")
-
-    # 1. Each --profile, in the order given on the command line.
-    if [[ -n "${argc_profile[*]:-}" ]]; then
-        local name
-        for name in "${argc_profile[@]}"; do
-            BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
-            _load_config "$config_dir/$name.sh"
-            binds+=("${BWRAP_RW[@]}")
-            devs+=("${BWRAP_DEV[@]}")
-            [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
-        done
-    fi
-
-    # 2. Each .bwrap-cwd file found from $PWD to /, root-most first.
-    local -a dotfiles
-    _find_dotfiles dotfiles
-    local file
-    for file in "${dotfiles[@]}"; do
-        BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
-        _load_config "$file"
-        binds+=("${BWRAP_RW[@]}")
-        devs+=("${BWRAP_DEV[@]}")
-        [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
-    done
-
-    # 3. Append -b/-d command line options last.
-    [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
-    [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
+    _build_binds
 
     # Command precedence: positional args, then last BWRAP_CMD seen above, then bash.
     if [[ -n "${argc_cmd[*]:-}" ]]; then
@@ -128,7 +248,53 @@ main() {
         cmd=(bash)
     fi
 
+    # If a hint is defined by now (ambient shell, a profile, or a
+    # .bwrap-cwd file), refresh the local Claude Code SessionStart hook
+    # with the resolved text.
+    local resolved_hint
+    if resolved_hint="$(_resolve_hint)"; then
+        _write_claude_hint "$resolved_hint"
+    fi
+
     _run "${binds[@]}" --dev-- "${devs[@]}" -- "${cmd[@]}"
+}
+
+# @cmd Claude Code integration helpers.
+claude() { :; }
+
+# @cmd Show the final BWRAP_CWD_CLAUDE_HINT text after variable substitution.
+#
+# Rebuilds the same read-write/device bind lists a real run would use
+# (fixed defaults, --profile in order, .bwrap-cwd files root-to-cwd, then
+# -b/-d), exports them as BWRAP_CWD_RW/BWRAP_CWD_DEV, and expands
+# BWRAP_CWD_CLAUDE_HINT with envsubst -- without touching bwrap or the
+# local ./.claude/settings.json. Use it to check a hint before it is
+# actually written by a real run.
+#
+# A hint that just reports the writable paths, a good starting point to
+# adapt, might be defined (in a profile, a .bwrap-cwd file, or exported
+# in the shell) as:
+#
+#   BWRAP_CWD_CLAUDE_HINT='You are running inside a bubblewrap sandbox
+#   (via bwrap-cwd). Only these paths are writable: ${BWRAP_CWD_RW}.
+#   Everything else on the filesystem is read-only: a write there fails
+#   with a read-only-filesystem error, not a permissions bug in the
+#   target, so do not spend time debugging it as one. If a tool needs
+#   another path writable, tell the user rather than working around it;
+#   they can add it with -b <path> or in a profile/.bwrap-cwd file.'
+claude::hint() {
+    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+    local -a binds=() devs=() cmd=()
+
+    _build_binds
+
+    local resolved_hint
+    if resolved_hint="$(_resolve_hint)"; then
+        printf '%s\n' "$resolved_hint"
+    else
+        echo "bwrap-cwd: BWRAP_CWD_CLAUDE_HINT is not set (in the shell, a --profile, or a .bwrap-cwd file)" >&2
+        exit 1
+    fi
 }
 
 eval "$(argc --argc-eval "$0" "$@")"
