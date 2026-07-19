@@ -125,11 +125,26 @@ _set_kitty_title() {
   fi
 }
 
+# kitten @ set-tab-title with no title argument clears the tab's explicit
+# name, handing title display back to the active window's own OSC reports
+# (i.e. restores kitty's default cwd/process tab title behavior).
+_reset_kitty_title() {
+  if command -v kitten >/dev/null 2>&1; then
+    kitten @ set-tab-title >/dev/null 2>&1 || true
+  fi
+}
+
 _emit() {
   local agent="$1" payload="$2"
   local event cwd repo branch label mark title
 
   event=$(_json_value "$payload" hook_event_name)
+
+  if [ "$event" = SessionEnd ]; then
+    _reset_kitty_title
+    return
+  fi
+
   cwd=$(_json_value "$payload" cwd)
   [ -z "$cwd" ] && cwd="$PWD"
 
@@ -152,7 +167,7 @@ _emit() {
 # Events that carry a tool matcher.
 _install_matcher_events() { printf '%s\n' PreToolUse PostToolUse PermissionRequest; }
 # Events with no matcher.
-_install_plain_events() { printf '%s\n' SessionStart UserPromptSubmit Stop SubagentStop PreCompact PostCompact; }
+_install_plain_events() { printf '%s\n' SessionStart UserPromptSubmit Stop SubagentStop PreCompact PostCompact SessionEnd; }
 
 _script_path() {
   readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || printf '%s' "$0"
