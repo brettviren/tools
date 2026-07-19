@@ -7,18 +7,29 @@
 # A profile is a shell file at ~/.config/bwrap-cwd/<profile>.sh that may set:
 #   BWRAP_RW   array of paths to additionally bind read-write
 #   BWRAP_DEV  array of device files to bind with --dev-bind (e.g. GPU devices)
+#   BWRAP_NO   array of paths to hide (present as an empty directory inside)
 #   BWRAP_CMD  array holding the command line to run (default: bash)
 # All are optional.
 #
+# BWRAP_NO paths are hidden by mounting an empty tmpfs over each one (bwrap's
+# --tmpfs), so the path still exists but appears empty to processes in the
+# sandbox; nothing underneath it is visible or reachable. Hides are applied
+# last, after all read-write and device binds, so a path listed in BWRAP_NO
+# stays hidden even if some other bind would otherwise land on top of it.
+#
 # -p/--profile may be given multiple times. Also, any file named .bwrap-cwd
 # found by searching from the current directory up to the root is sourced;
-# it may set the same BWRAP_RW/BWRAP_DEV/BWRAP_CMD variables as a profile.
-# Sources are applied in this order: each --profile in the order given on
-# the command line, then each found .bwrap-cwd file starting with the one
-# nearest the root and ending with the one nearest the current directory
-# (so a .bwrap-cwd file always wins over a --profile, and one nearer the
-# current directory wins over one nearer the root). -b/-d options are
-# appended last and so take final precedence for the binds they add.
+# it may set the same BWRAP_RW/BWRAP_DEV/BWRAP_NO/BWRAP_CMD variables as a
+# profile. Sources are applied in this order: each --profile in the order
+# given on the command line, then each found .bwrap-cwd file starting with
+# the one nearest the root and ending with the one nearest the current
+# directory (so a .bwrap-cwd file always wins over a --profile, and one
+# nearer the current directory wins over one nearer the root). -b/-d/-n
+# options are appended last and so take final precedence for the binds/hides
+# they add. -u/--unhide is applied after all of that, removing any matching
+# path from the hide list regardless of whether it came from a BWRAP_NO
+# array or a -n/--hide option; a -u path that doesn't match anything
+# currently hidden is silently ignored.
 #
 # If BWRAP_CWD_CLAUDE_HINT ends up defined (set in the calling shell, a
 # profile, or a .bwrap-cwd file) its value is registered as additional
@@ -26,18 +37,20 @@
 # ./.claude/settings.json (any existing settings are preserved; only a
 # hook entry pointing at ./.claude/hooks/bwrap-cwd-hint.sh is added or
 # refreshed). Just before the command is run, the hint text is expanded
-# with envsubst, so it may reference BWRAP_CWD_RW and BWRAP_CWD_DEV (the
-# final, comma-separated read-write and device bind lists) as well as
-# any other variable exported by a profile or .bwrap-cwd file. A "$name"
-# or "${name}" reference to an unset variable expands to an empty string;
-# a "$" not forming such a reference (not followed by a name) passes
-# through unchanged. Requires jq and envsubst.
+# with envsubst, so it may reference BWRAP_CWD_RW, BWRAP_CWD_DEV and
+# BWRAP_CWD_NO (the final, comma-separated read-write bind, device bind and
+# hidden-path lists) as well as any other variable exported by a profile or
+# .bwrap-cwd file. A "$name" or "${name}" reference to an unset variable
+# expands to an empty string; a "$" not forming such a reference (not
+# followed by a name) passes through unchanged. Requires jq and envsubst.
 #
 # `claude` is a group of Claude Code integration helpers; see its own
 # subcommands (e.g. `claude hint`) for details.
 # @option -p --profile* <name>  Profile resolving to ~/.config/bwrap-cwd/<name>.sh (repeatable)
 # @option -b --bind* <path>     Extra path to bind read-write (repeatable)
 # @option -d --dev-bind* <path> Extra device file to --dev-bind (repeatable)
+# @option -n --hide* <path>     Extra path to hide (present empty inside) (repeatable)
+# @option -u --unhide* <path>   Path to remove from the hide list, if present (repeatable)
 # @arg cmd*                     Command line to run (default: bash)
 
 set -euo pipefail
@@ -92,6 +105,29 @@ _canonicalize() {
     return 0
 }
 
+# Remove, from the named nos array (nameref), any entry matching one of the
+# given unhide paths. nos is expected to already be canonicalized (see
+# _canonicalize); each unhide path is resolved with `realpath -m`, which
+# tolerates missing path components instead of erroring, so a -u/--unhide
+# path that matches nothing already hidden (a typo, or simply nothing to
+# undo) is silently ignored rather than failing the whole run. Always
+# returns 0: see _load_config for why a deterministic return matters when
+# this is called bare (unguarded) elsewhere.
+_apply_unhide() {
+    local -n _nos="$1"; shift
+    local u i
+    local -a kept
+    for u in "$@"; do
+        u="$(realpath -m -- "$u")"
+        for i in "${!_nos[@]}"; do
+            [[ "${_nos[i]}" == "$u" ]] && unset '_nos[i]'
+        done
+    done
+    kept=("${_nos[@]}")
+    _nos=("${kept[@]}")
+    return 0
+}
+
 # Join arguments with a separator string.
 _join() {
     local sep="$1"; shift
@@ -103,20 +139,22 @@ _join() {
 }
 
 # Source each --profile (in the order given), then each found .bwrap-cwd
-# file (root-most first, cwd-most last), appending their BWRAP_RW/BWRAP_DEV
-# into the caller's `binds`/`devs` arrays and letting BWRAP_CMD, if any,
-# overwrite the caller's `cmd` array. Caller must have declared
-# BWRAP_RW/BWRAP_DEV/BWRAP_CMD and binds/devs/cmd as local arrays.
-# Always returns 0: see _load_config for why a deterministic return
-# matters when this is called bare (unguarded) elsewhere.
+# file (root-most first, cwd-most last), appending their
+# BWRAP_RW/BWRAP_DEV/BWRAP_NO into the caller's `binds`/`devs`/`nos` arrays
+# and letting BWRAP_CMD, if any, overwrite the caller's `cmd` array. Caller
+# must have declared BWRAP_RW/BWRAP_DEV/BWRAP_NO/BWRAP_CMD and
+# binds/devs/nos/cmd as local arrays. Always returns 0: see _load_config for
+# why a deterministic return matters when this is called bare (unguarded)
+# elsewhere.
 _gather_config() {
     if [[ -n "${argc_profile[*]:-}" ]]; then
         local name
         for name in "${argc_profile[@]}"; do
-            BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+            BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
             _load_config "$config_dir/$name.sh"
             binds+=("${BWRAP_RW[@]}")
             devs+=("${BWRAP_DEV[@]}")
+            nos+=("${BWRAP_NO[@]}")
             [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
         done
     fi
@@ -125,21 +163,22 @@ _gather_config() {
     _find_dotfiles dotfiles
     local file
     for file in "${dotfiles[@]}"; do
-        BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
+        BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
         _load_config "$file"
         binds+=("${BWRAP_RW[@]}")
         devs+=("${BWRAP_DEV[@]}")
+        nos+=("${BWRAP_NO[@]}")
         [[ -n "${BWRAP_CMD[*]:-}" ]] && cmd=("${BWRAP_CMD[@]}")
     done
     return 0
 }
 
-# Populate the caller's `binds`/`devs` arrays: fixed default binds, then
-# _gather_config's contribution, then any -b/-d command line options.
-# Caller must have declared BWRAP_RW/BWRAP_DEV/BWRAP_CMD and
-# binds/devs/cmd as local arrays. Always returns 0: see _load_config for
-# why a deterministic return matters when this is called bare (unguarded)
-# elsewhere.
+# Populate the caller's `binds`/`devs`/`nos` arrays: fixed default binds,
+# then _gather_config's contribution, then any -b/-d/-n command line
+# options, then any -u/--unhide removals. Caller must have declared
+# BWRAP_RW/BWRAP_DEV/BWRAP_NO/BWRAP_CMD and binds/devs/nos/cmd as local
+# arrays. Always returns 0: see _load_config for why a deterministic
+# return matters when this is called bare (unguarded) elsewhere.
 _build_binds() {
     binds=(
         "$PWD"
@@ -154,21 +193,26 @@ _build_binds() {
 
     [[ -n "${argc_bind[*]:-}" ]] && binds+=("${argc_bind[@]}")
     [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
+    [[ -n "${argc_hide[*]:-}" ]] && nos+=("${argc_hide[@]}")
 
     _canonicalize binds
     _canonicalize devs
+    _canonicalize nos
+
+    [[ -n "${argc_unhide[*]:-}" ]] && _apply_unhide nos "${argc_unhide[@]}"
     return 0
 }
 
 # If BWRAP_CWD_CLAUDE_HINT is defined by now, export BWRAP_CWD_RW/
-# BWRAP_CWD_DEV from the caller's finalized `binds`/`devs` arrays, expand
-# the hint with envsubst, and print the result. Returns non-zero (no
-# output) if no hint is defined.
+# BWRAP_CWD_DEV/BWRAP_CWD_NO from the caller's finalized `binds`/`devs`/
+# `nos` arrays, expand the hint with envsubst, and print the result.
+# Returns non-zero (no output) if no hint is defined.
 _resolve_hint() {
     [[ -n "${BWRAP_CWD_CLAUDE_HINT:-}" ]] || return 1
-    export BWRAP_CWD_RW BWRAP_CWD_DEV
+    export BWRAP_CWD_RW BWRAP_CWD_DEV BWRAP_CWD_NO
     BWRAP_CWD_RW="$(_join ', ' "${binds[@]}")"
     BWRAP_CWD_DEV="$(_join ', ' "${devs[@]}")"
+    BWRAP_CWD_NO="$(_join ', ' "${nos[@]}")"
     printf '%s' "$BWRAP_CWD_CLAUDE_HINT" | envsubst
 }
 
@@ -208,14 +252,17 @@ _write_claude_hint() {
     printf '%s\n' "$content" > "$settings_file"
 }
 
-# Build and exec the bwrap invocation given the read-write binds, device binds
-# and command.  Arguments are the read-write binds, then "--dev--", then the
-# device binds, then "--", then the command line.
+# Build and exec the bwrap invocation given the read-write binds, device
+# binds, hidden paths and command. Arguments are the read-write binds, then
+# "--dev--", then the device binds, then "--no--", then the hidden paths,
+# then "--", then the command line.
 _run() {
-    local -a binds=() devs=() cmd=()
+    local -a binds=() devs=() nos=() cmd=()
     while [[ "$1" != "--dev--" ]]; do binds+=("$1"); shift; done
     shift
-    while [[ "$1" != "--" ]]; do devs+=("$1"); shift; done
+    while [[ "$1" != "--no--" ]]; do devs+=("$1"); shift; done
+    shift
+    while [[ "$1" != "--" ]]; do nos+=("$1"); shift; done
     shift
     cmd=("$@")
 
@@ -231,13 +278,18 @@ _run() {
     for p in "${devs[@]}"; do
         args+=(--dev-bind "$p" "$p")
     done
+    # Hides go last so they win over any bind that would otherwise land on
+    # top of a path meant to stay hidden.
+    for p in "${nos[@]}"; do
+        args+=(--tmpfs "$p")
+    done
 
     exec bwrap "${args[@]}" -- "${cmd[@]}"
 }
 
 main() {
-    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
-    local -a binds=() devs=() cmd=()
+    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
+    local -a binds=() devs=() nos=() cmd=()
 
     _build_binds
 
@@ -256,7 +308,7 @@ main() {
         _write_claude_hint "$resolved_hint"
     fi
 
-    _run "${binds[@]}" --dev-- "${devs[@]}" -- "${cmd[@]}"
+    _run "${binds[@]}" --dev-- "${devs[@]}" --no-- "${nos[@]}" -- "${cmd[@]}"
 }
 
 # @cmd Claude Code integration helpers.
@@ -264,11 +316,11 @@ claude() { :; }
 
 # @cmd Show the final BWRAP_CWD_CLAUDE_HINT text after variable substitution.
 #
-# Rebuilds the same read-write/device bind lists a real run would use
+# Rebuilds the same read-write/device/hidden path lists a real run would use
 # (fixed defaults, --profile in order, .bwrap-cwd files root-to-cwd, then
-# -b/-d), exports them as BWRAP_CWD_RW/BWRAP_CWD_DEV, and expands
-# BWRAP_CWD_CLAUDE_HINT with envsubst -- without touching bwrap or the
-# local ./.claude/settings.json. Use it to check a hint before it is
+# -b/-d/-n), exports them as BWRAP_CWD_RW/BWRAP_CWD_DEV/BWRAP_CWD_NO, and
+# expands BWRAP_CWD_CLAUDE_HINT with envsubst -- without touching bwrap or
+# the local ./.claude/settings.json. Use it to check a hint before it is
 # actually written by a real run.
 #
 # A hint that just reports the writable paths, a good starting point to
@@ -283,8 +335,8 @@ claude() { :; }
 #   another path writable, tell the user rather than working around it;
 #   they can add it with -b <path> or in a profile/.bwrap-cwd file.'
 claude::hint() {
-    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_CMD=()
-    local -a binds=() devs=() cmd=()
+    local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
+    local -a binds=() devs=() nos=() cmd=()
 
     _build_binds
 
