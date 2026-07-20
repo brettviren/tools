@@ -58,16 +58,67 @@ def transitive_reduction(adj: dict[str, set[str]]) -> dict[str, set[str]]:
     return reduced
 
 
-def to_dot(nodes: list[dict], reduce: bool = True, show_libs: bool = False) -> str:
+def _node_attrs(n: dict, show_libs: bool) -> str:
+    """Return the bracketed GraphViz attribute list for node dict *n*.
+
+    An explicit ``fillcolor`` key (set by the configuration path) wins; failing
+    that a truthy ``source`` key marks a command-line package with
+    ``SOURCE_FILLCOLOR``, while dependency-only packages keep the default node
+    fill.  An explicit ``shape`` key overrides the default box.
+    """
+    node_id = escape_string(n['name'])
+    parts = [node_id]
+    if show_libs:
+        parts.extend(escape_string(lib) for lib in n.get('libs', []))
+    label = r'\n'.join(parts)
+
+    attrs = [f'label="{label}"']
+    if n.get('fillcolor'):
+        attrs.append(f'fillcolor={n["fillcolor"]}')
+    elif n.get('source'):
+        attrs.append(f'fillcolor={SOURCE_FILLCOLOR}')
+    if n.get('shape'):
+        attrs.append(f'shape={n["shape"]}')
+    return '[' + ', '.join(attrs) + ']'
+
+
+def _legend_lines(legend: list[dict]) -> list[str]:
+    """Return dot lines for a disconnected legend subgraph, or [] if none."""
+    if not legend:
+        return []
+    lines = ['    subgraph cluster_legend {', '        label="Legend";', '']
+    for i, entry in enumerate(legend):
+        attrs = [f'label="{escape_string(entry["label"])}"']
+        if entry.get('fillcolor'):
+            attrs.append(f'fillcolor={entry["fillcolor"]}')
+        if entry.get('shape'):
+            attrs.append(f'shape={entry["shape"]}')
+        lines.append(f'        "__legend_{i}" [' + ', '.join(attrs) + '];')
+    lines.append('    }')
+    lines.append('')
+    return lines
+
+
+def to_dot(
+    nodes: list[dict],
+    reduce: bool = True,
+    show_libs: bool = False,
+    graph_label: str | None = None,
+    legend: list[dict] | None = None,
+) -> str:
     """Return GraphViz dot text for *nodes*.
 
     Each node dict must have:
       name  – unique identifier string used as the dot node id
       deps  – set of name strings this node depends on
-    A truthy ``source`` key marks a package named on the command line; such
-    nodes are filled with ``SOURCE_FILLCOLOR`` while packages discovered only
-    through dependencies (present solely as edge targets, with no node dict)
-    inherit the default ``DEP_FILLCOLOR`` node style.
+    Node fill and shape come from the ``fillcolor``/``shape`` keys when present
+    (the configuration path); otherwise a truthy ``source`` key marks a
+    command-line package with ``SOURCE_FILLCOLOR`` and dependency-only packages
+    (present solely as edge targets, with no node dict) inherit the default
+    ``DEP_FILLCOLOR`` node style.
+
+    *graph_label* sets a graph-level label; *legend* adds a disconnected legend
+    subgraph (a list of ``{label, fillcolor, shape}`` entries).
 
     When *reduce* is True (the default), transitive reduction is applied
     before emitting edges so that edges implied by longer paths are omitted.
@@ -79,22 +130,14 @@ def to_dot(nodes: list[dict], reduce: bool = True, show_libs: bool = False) -> s
         'digraph cmake_deps {',
         '    rankdir=LR;',
         f'    node [shape=box, style=filled, fillcolor={DEP_FILLCOLOR}];',
-        '',
     ]
+    if graph_label:
+        lines.append(f'    label="{escape_string(graph_label)}";')
+        lines.append('    labelloc="t";')
+    lines.append('')
+    lines.extend(_legend_lines(legend or []))
     for n in nodes:
-        # Build the label from individually-escaped parts joined with the
-        # GraphViz \n escape.  The separator is placed after escaping so it
-        # is never itself escaped.
-        node_id = escape_string(n['name'])
-        parts = [node_id]
-        if show_libs:
-            for lib in n.get('libs', []):
-                parts.append(escape_string(lib))
-        label = r'\n'.join(parts)
-        # Command-line packages get a distinct fill; dependency-only packages
-        # are never emitted here and so keep the default node fillcolor.
-        fill = f', fillcolor={SOURCE_FILLCOLOR}' if n.get('source') else ''
-        lines.append(f'    "{node_id}" [label="{label}"{fill}];')
+        lines.append(f'    "{escape_string(n["name"])}" {_node_attrs(n, show_libs)};')
     lines.append('')
     for n in nodes:
         src = n['name']
@@ -111,6 +154,8 @@ def write(
     output_filename: str | Path,
     reduce: bool = True,
     show_libs: bool = False,
+    graph_label: str | None = None,
+    legend: list[dict] | None = None,
 ) -> list[Path]:
     """Write *nodes* to *output_filename*, rendering via GraphViz when needed.
 
@@ -119,7 +164,8 @@ def write(
     output and then rendered by invoking the system ``dot`` command.
 
     *reduce* is forwarded to :func:`to_dot`; set to False to suppress
-    transitive reduction and show all declared edges.
+    transitive reduction and show all declared edges.  *graph_label* and
+    *legend* are likewise forwarded.
 
     Returns the list of paths actually written (dot file, and graphics file
     when applicable).  Raises RuntimeError on any failure.
@@ -128,7 +174,8 @@ def write(
     ext = output_path.suffix.lstrip('.').lower()
     dot_path = output_path if ext == 'dot' else output_path.with_suffix('.dot')
 
-    dot_path.write_text(to_dot(nodes, reduce=reduce, show_libs=show_libs))
+    dot_path.write_text(to_dot(nodes, reduce=reduce, show_libs=show_libs,
+                               graph_label=graph_label, legend=legend))
     log.debug('wrote dot file %s', dot_path)
     written = [dot_path]
 

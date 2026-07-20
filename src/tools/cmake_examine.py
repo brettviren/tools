@@ -1,15 +1,19 @@
 """cmake-examine: CLI for inspecting CMake source packages without modifying them."""
 
+import logging
 from pathlib import Path
 
 import click
 
-from tools import cmake, dot
+from tools import cmake, cmake_config, dot
 
 
 @click.group()
 def cli():
     """Examine CMake-based source packages without modifying them."""
+    # Surface library warnings (dropped globs, missing CMakeLists.txt, cmake
+    # configure failures) to the user on stderr.
+    logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
 
 
 @cli.command(name='options')
@@ -40,8 +44,26 @@ def options_cmd(paths: tuple[Path, ...], defines: tuple[str, ...]) -> None:
 
 
 @cli.command(name='deps')
-@click.argument('paths', nargs=-1, required=True,
+@click.argument('paths', nargs=-1, required=False,
                 type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option('-c', '--config', 'config_files', multiple=True, metavar='FILE',
+              type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              help='TOML configuration file defining suites and graphs.  May be '
+                   'repeated; a cmake-examine-deps.toml in the current directory '
+                   'is always loaded first.')
+@click.option('-g', '--graph', 'graph_name', metavar='NAME',
+              help='Select the [graph.NAME] section to build (config only).  '
+                   'Defaults to [graph.DEFAULT], else the first graph defined.')
+@click.option('--depth', 'depth', default=-1, show_default=True, metavar='N',
+              help='Limit dependency traversal depth from the directly identified '
+                   'packages.  -1 traverses as deep as possible; 0 keeps only the '
+                   'directly identified packages; N keeps packages within distance N.')
+@click.option('--cmake-prefix-path', 'prefix_path', multiple=True, metavar='PATH',
+              help='Prefix(es) under which to locate installed <name>Config.cmake '
+                   'files so find_package() can be chased past the source packages.  '
+                   'May be repeated or os.pathsep-separated; CMAKE_PREFIX_PATH from '
+                   'the environment is also consulted.  Where a config file cannot '
+                   'be found the graph may be truncated along that path.')
 @click.option('-o', '--output', 'output', default='cmake-deps.dot', show_default=True,
               metavar='FILE',
               help='Output file.  Extension "dot" writes dot text; any other '
@@ -59,6 +81,10 @@ def options_cmd(paths: tuple[Path, ...], defines: tuple[str, ...]) -> None:
               help='List library targets produced by each package inside its node.')
 def deps_cmd(
     paths: tuple[Path, ...],
+    config_files: tuple[Path, ...],
+    graph_name: str | None,
+    depth: int,
+    prefix_path: tuple[str, ...],
     output: str,
     defines: tuple[str, ...],
     run_cmake: bool,
@@ -67,12 +93,18 @@ def deps_cmd(
 ) -> None:
     """Produce a package-level dependency graph for the given source PATH(s).
 
-    cmake files in each PATH are parsed for find_package() declarations.
+    cmake files in each package are parsed for find_package() declarations.
     When --cmake is active (the default), cmake is also run in a secure
     temporary build directory so that only packages cmake actually locates
     appear in the graph; packages not found are omitted.  Inter-source-package
     edges are always preserved regardless of cmake's find result.  Any -D
     options are forwarded to cmake to reflect optional-build choices.
+
+    With a configuration file (-c, or a cmake-examine-deps.toml in the current
+    directory) the packages are identified and styled by suites and the graph
+    is chosen with -g/--graph; the command-line PATHs, if any, are added as
+    directly identified packages.  Without a configuration file, the PATHs are
+    required and behaviour is unchanged.
 
     \b
     Output rules:
@@ -80,9 +112,26 @@ def deps_cmd(
       --output deps.png         write cmake-deps.dot AND render it to deps.png
       --output deps.svg         write cmake-deps.dot AND render it to deps.svg
     """
+    config = cmake_config.load_config(cmake_config.find_config_files(config_files))
+    prefixes = cmake_config.resolve_prefix_paths(prefix_path)
+
     try:
-        nodes = cmake.dependency_graph(paths, defines=defines, run_cmake=run_cmake)
-        written = dot.write(nodes, output, reduce=reduce, show_libs=show_libs)
+        if config is None:
+            if not paths:
+                raise click.UsageError('no source PATHs given and no configuration found')
+            nodes = cmake.dependency_graph(
+                paths, defines=defines, run_cmake=run_cmake, depth=depth,
+                prefix_paths=prefixes)
+            written = dot.write(nodes, output, reduce=reduce, show_libs=show_libs)
+        else:
+            graph = cmake_config.select_graph(config, graph_name)
+            nodes, label, legend = cmake_config.build_config_graph(
+                config, graph, paths, depth=depth, defines=defines,
+                run_cmake=run_cmake, show_libs=show_libs, prefix_paths=prefixes)
+            written = dot.write(nodes, output, reduce=reduce, show_libs=show_libs,
+                                graph_label=label, legend=legend)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
