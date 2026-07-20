@@ -61,7 +61,6 @@ time-entry              Monthly time allocator for fiscal-year project reporting
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 #+end_example
 
-
 * Multiple accounts
 
 Some of the tools (clones, manycron) only make sense to use when you have
