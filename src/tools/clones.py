@@ -98,16 +98,20 @@ def _repo_invocation(user, host, path, script):
     return argv, full
 
 
-def run_in_repo(user, host, path, script, capture=False):
-    """Run script under 'cd path && ...' on host (or locally if host is None)."""
+def run_in_repo(user, host, path, script, capture=False, check=False):
+    """Run script under 'cd path && ...' on host (or locally if host is None).
+
+    Callers that inspect the returned CompletedProcess.returncode themselves
+    should leave check=False; pass check=True only when a non-zero exit
+    should raise CalledProcessError instead."""
     argv, full = _repo_invocation(user, host, path, script)
     if capture:
         return subprocess.run(argv, input=full,
-                              capture_output=True, text=True, check=True)
-    return subprocess.run(argv, input=full, text=True, check=True)
+                              capture_output=True, text=True, check=check)
+    return subprocess.run(argv, input=full, text=True, check=check)
 
 
-def run_command(user, host, script, capture=False):
+def run_command(user, host, script, capture=False, check=False):
     """Run script on host without cd'ing anywhere (starts in home dir)."""
     if host:
         target = f"{user}@{host}" if user else host
@@ -116,8 +120,8 @@ def run_command(user, host, script, capture=False):
         argv = ["bash"]
     if capture:
         return subprocess.run(argv, input=script,
-                              capture_output=True, text=True, check=True)
-    return subprocess.run(argv, input=script, text=True, check=True)
+                              capture_output=True, text=True, check=check)
+    return subprocess.run(argv, input=script, text=True, check=check)
 
 
 # ── preflight ──────────────────────────────────────────────────────────────
@@ -134,6 +138,7 @@ class RepoState:
     uncommitted: int = 0
     error: str | None = None
     missing: bool = False
+    unreachable: bool = False  # host could not be ssh'd to at all
     git_dir_is_cwd: bool = False  # bare or vcsh-style: the git dir IS the path
 
     @property
@@ -312,17 +317,19 @@ def _preflight_live(entries) -> list[RepoState]:
             try:
                 r = subprocess.run(
                     _SSH_BASE + ['-q', target, 'true'],
-                    capture_output=True, timeout=20, check=True
+                    capture_output=True, timeout=20, check=False
                 )
             except subprocess.TimeoutExpired:
                 put(_M_TIMEOUT, 'connection timed out')
                 states[idx] = RepoState(group=group, label=label, user=user, host=host,
-                                        path=path, missing=True, error='connection timed out')
+                                        path=path, missing=True, unreachable=True,
+                                        error='connection timed out')
                 return
             if r.returncode != 0:
                 put(_M_ERROR, 'connection failed')
                 states[idx] = RepoState(group=group, label=label, user=user, host=host,
-                                        path=path, missing=True, error='connection failed')
+                                        path=path, missing=True, unreachable=True,
+                                        error='connection failed')
                 return
         put(_M_CHECKING, 'checking...')
         state = preflight_one(group, label, user, host, path)
@@ -574,7 +581,11 @@ def run_in_groups(ctx, cmd, parallel=False, jobs=None, group_mode=False):
             user, host, remote_path = parse_path(path)
             label = (f"{user}@{host}" if user else host) + f":{remote_path}" if host else remote_path
             click.echo(f"==> [{group}] {label}")
-            run_in_repo(user, host, remote_path, shell_cmd)
+            result = run_in_repo(user, host, remote_path, shell_cmd)
+            if result.returncode != 0:
+                raise click.ClickException(
+                    f"[{group}] {label}: command exited with status {result.returncode}"
+                )
 
 
 @cli.command(name="run", context_settings={"ignore_unknown_options": True})
@@ -670,7 +681,8 @@ def _sync_one_group(config, group, emit, *, interactive=True):
         for state in states:
             emit(f"  [{_state_marker(state)}] {state.label}: {state.summary()}")
 
-    missing          = [s for s in states if s.missing]
+    unreachable      = [s for s in states if s.unreachable]
+    missing          = [s for s in states if s.missing and not s.unreachable]
     preflight_errors = [s for s in states if s.error and not s.missing]
     diverged         = [s for s in states if s.diverged]
     actionable       = [s for s in states if not s.error]
@@ -696,11 +708,13 @@ def _sync_one_group(config, group, emit, *, interactive=True):
 
     if diverged:
         emit(f"Warning: {len(diverged)} repo(s) are diverged — rebase conflicts possible.")
+    if unreachable:
+        emit(f"Skipping {len(unreachable)} repo(s) on unreachable hosts.")
     if preflight_errors:
         emit(f"Skipping {len(preflight_errors)} repo(s) with preflight errors.")
     if not actionable:
         emit("Nothing to sync.")
-        all_failed = clone_failed + preflight_errors
+        all_failed = clone_failed + unreachable + preflight_errors
         if all_failed:
             emit(f"{len(all_failed)} repo(s) need attention:")
             for s in all_failed:
@@ -759,7 +773,7 @@ def _sync_one_group(config, group, emit, *, interactive=True):
             run_in_repo(state.user, state.host, state.path, "git pull --rebase")
 
     emit("Done.")
-    all_failed = clone_failed + preflight_errors + phase1_failed
+    all_failed = clone_failed + unreachable + preflight_errors + phase1_failed
     if all_failed:
         emit(f"{len(all_failed)} repo(s) need attention:")
         for s in all_failed:
