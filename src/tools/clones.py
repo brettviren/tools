@@ -35,11 +35,10 @@ import threading
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-
 
 CONFIG_PATH = Path("~/.config/clones/config.toml").expanduser()
 
@@ -55,7 +54,7 @@ def _infer_group(config):
     """Return a group name inferred from the cwd's git worktree root, or None."""
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=True
     )
     if result.returncode != 0:
         return None
@@ -103,8 +102,9 @@ def run_in_repo(user, host, path, script, capture=False):
     """Run script under 'cd path && ...' on host (or locally if host is None)."""
     argv, full = _repo_invocation(user, host, path, script)
     if capture:
-        return subprocess.run(argv, input=full, capture_output=True, text=True)
-    return subprocess.run(argv, input=full, text=True)
+        return subprocess.run(argv, input=full,
+                              capture_output=True, text=True, check=True)
+    return subprocess.run(argv, input=full, text=True, check=True)
 
 
 def run_command(user, host, script, capture=False):
@@ -115,8 +115,9 @@ def run_command(user, host, script, capture=False):
     else:
         argv = ["bash"]
     if capture:
-        return subprocess.run(argv, input=script, capture_output=True, text=True)
-    return subprocess.run(argv, input=script, text=True)
+        return subprocess.run(argv, input=script,
+                              capture_output=True, text=True, check=True)
+    return subprocess.run(argv, input=script, text=True, check=True)
 
 
 # ── preflight ──────────────────────────────────────────────────────────────
@@ -311,7 +312,7 @@ def _preflight_live(entries) -> list[RepoState]:
             try:
                 r = subprocess.run(
                     _SSH_BASE + ['-q', target, 'true'],
-                    capture_output=True, timeout=20,
+                    capture_output=True, timeout=20, check=True
                 )
             except subprocess.TimeoutExpired:
                 put(_M_TIMEOUT, 'connection timed out')
@@ -333,7 +334,7 @@ def _preflight_live(entries) -> list[RepoState]:
         for f in futures:
             try:
                 f.result()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 click.echo(f'  error: {exc}', err=True)
 
     sys.stdout.write('\n')
@@ -515,11 +516,11 @@ def _run_parallel(entries, script, jobs, group_mode, heartbeat_interval=10):
             pool.submit(_run_one_parallel, e, st, script, printer, group_mode): st
             for e, st in zip(entries, states)
         }
-        for f in futures:
+        for f, val in futures.items():
             try:
                 f.result()
-            except Exception as exc:
-                printer.note(f"[{futures[f].label}] error: {exc}", err=True)
+            except Exception as exc:  # noqa: BLE001
+                printer.note(f"[{val.label}] error: {exc}", err=True)
 
     stop.set()
     hb.join(timeout=2)
@@ -664,7 +665,7 @@ def _sync_one_group(config, group, emit, *, interactive=True):
             for f in futures:
                 try:
                     f.result()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     emit(f"  preflight error: {exc}")
         for state in states:
             emit(f"  [{_state_marker(state)}] {state.label}: {state.summary()}")
@@ -706,7 +707,7 @@ def _sync_one_group(config, group, emit, *, interactive=True):
                 emit(f"  {s.label}: {s.error or 'clone or sync failed'}")
         return
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     quoted_msg = shlex.quote(f"sync: {timestamp}")
     phase1_script = "; ".join([
         "set -e",
@@ -717,7 +718,7 @@ def _sync_one_group(config, group, emit, *, interactive=True):
     ])
     # vcsh/bare-worktree: skip auto-commit; worktree is outside the repo path
     # so git add -A would sweep the entire home directory.
-    gitdir_script = "; ".join([
+    gitdir_script = "; ".join([  # noqa: FLY002
         "set -e",
         "git pull --rebase",
         "git push",
@@ -790,11 +791,11 @@ def sync_cmd(ctx):
             pool.submit(_sync_one_group, config, g, make_emit(g), interactive=False): g
             for g in groups
         }
-        for future in futures:
+        for future, val in futures.items():
             try:
                 future.result()
-            except Exception as exc:
-                click.echo(f"error in [{futures[future]}]: {exc}", err=True)
+            except Exception as exc:  # noqa: BLE001
+                click.echo(f"error in [{val}]: {exc}", err=True)
 
 
 @cli.command(name="edit")
@@ -802,7 +803,7 @@ def sync_cmd(ctx):
 def edit_cmd(ctx):
     """Open the configuration file in $EDITOR."""
     editor = os.environ.get("EDITOR", "vi")
-    subprocess.run([editor, str(CONFIG_PATH)])
+    subprocess.run([editor, str(CONFIG_PATH)], check=True)
 
 
 @cli.command(name="list")

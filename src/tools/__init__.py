@@ -16,6 +16,8 @@
 
 """tools – manage a collection of CLI tools installed via this package."""
 
+# ruff: noqa: BLE001
+
 import ast
 import functools
 import importlib
@@ -25,13 +27,11 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
 import click
 import tomlkit
-
 
 # ── copyright / license ───────────────────────────────────────────────────────
 
@@ -542,7 +542,8 @@ def _gen_click_completion(name: str, shell: str, outdir: Path) -> None:
     env_var = f"_{name.upper().replace('-', '_')}_COMPLETE"
     env = {**os.environ, env_var: f"{shell}_source"}
     try:
-        result = subprocess.run([name], env=env, capture_output=True, text=True)
+        result = subprocess.run([name], env=env,
+                                capture_output=True, text=True, check=True)
     except FileNotFoundError:
         click.echo(f"  {name}: not in PATH – install the package first", err=True)
         return
@@ -727,11 +728,11 @@ def summary() -> None:
     for name, kind, path, module, fn in _iter_scripts(root):
         if kind == "bash":
             native, _needs_llm = _bash_description(path)
-            desc, missing = _with_bundled_fallback(name, native)
+            desc, _missing = _with_bundled_fallback(name, native)
         elif path.exists():
-            desc, missing = _python_description(f"tools.{path.stem}", fn)
+            desc, _missing = _python_description(f"tools.{path.stem}", fn)
         else:
-            desc, missing = _external_description(name, module)
+            desc, _missing = _external_description(name, module)
 
         rows.append((name, desc if desc else "[missing]"))
 

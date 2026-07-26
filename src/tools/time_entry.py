@@ -21,8 +21,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+# ruff: noqa: DTZ005, DTZ007, DTZ011, BLE001, S110
+
 import asyncio
-import click
 import calendar
 import json
 import os
@@ -33,17 +34,15 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-
-def _xdg_config_dir() -> Path:
-    d = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "time-entry"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+import click
 
 
-def _xdg_state_dir() -> Path:
-    d = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser() / "time-entry"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _xdg_dir(what) -> Path:
+    what = what.upper()
+    cbase = Path(os.environ.get(f"XDG_{what}_HOME", "~/.config")).expanduser()
+    cdir = cbase / "time-entry"
+    cdir.mkdir(parents=True, exist_ok=True)
+    return cdir
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +51,15 @@ def _xdg_state_dir() -> Path:
 
 @dataclass
 class Project:
+    "One work-project."
+
     code: str
     pct: float
     desc: str
 
     @property
     def fraction(self) -> float:
+        "The percentage as a fraction."
         return self.pct / 100.0
 
 
@@ -69,6 +71,8 @@ class WeekEntry:
 
 @dataclass
 class MonthRecord:
+    "One work-month."
+
     year: int
     month: int
     working_days: int
@@ -79,12 +83,16 @@ class MonthRecord:
 
 @dataclass
 class Records:
+    "All work-months in a work-year."
+
     fiscal_year: int
     months: list[MonthRecord] = field(default_factory=list)
 
 
 @dataclass
 class WorkdayConfig:
+    "URLs for Workday."
+
     home_url: str = "https://www.myworkday.com/bnl/d/pex/home.htmld"
     time_entry_url: str = "https://www.myworkday.com/bnl/d/task/2998$10895.htmld"
 
@@ -143,12 +151,12 @@ time_entry_url = "https://www.myworkday.com/bnl/d/task/XXXX$YYYYY.htmld"
 # Percentages must sum to 100.
 [[projects]]
 code = "XXXXX"    # FIX: a project code
-pct  = XX         # FIX: target percentage 
+pct  = XX         # FIX: target percentage
 desc = "XXX XXX"  # FIX: a short description
 
 [[projects]]
 code = "YYYYY"    # FIX: a project code
-pct  = YY         # FIX: target percentage 
+pct  = YY         # FIX: target percentage
 desc = "YYY YYY"  # FIX: a short description
 
 """
@@ -1015,7 +1023,7 @@ async def _enter_time_for_day(page, change: DayChange, inspect: bool) -> bool:
         print("  [inspect] Panel opened. Wait until it is FULLY loaded in the")
         print("  [inspect] browser, then press Enter to capture its HTML: ", end="", flush=True)
         input()
-        dialog_html_path = _xdg_state_dir() / "workday_dialog_inspect.html"
+        dialog_html_path = _xdg_dir("state") / "workday_dialog_inspect.html"
         dialog_html_path.write_text(await page.content(), encoding="utf-8")
         print(f"  [inspect] Dialog HTML saved → {dialog_html_path}")
 
@@ -1061,7 +1069,7 @@ async def _enter_time_for_day(page, change: DayChange, inspect: bool) -> bool:
         pass
 
     if inspect:
-        dd_path = _xdg_state_dir() / "workday_dialog_dropdown.html"
+        dd_path = _xdg_dir("state") / "workday_dialog_dropdown.html"
         dd_path.write_text(await page.content(), encoding="utf-8")
         print(f"  [inspect] Dropdown HTML saved \u2192 {dd_path}")
 
@@ -1075,7 +1083,7 @@ async def _enter_time_for_day(page, change: DayChange, inspect: bool) -> bool:
             await active_popup.first.wait_for(state="hidden", timeout=5_000)
             committed = True
             break
-        except Exception:
+        except Exception:  # noqa: S112
             continue
     if not committed:
         print(f"  [warn] Could not set Time Type for {change.day} "
@@ -1166,7 +1174,7 @@ async def _enter_time_for_day(page, change: DayChange, inspect: bool) -> bool:
     # inspect mode, snapshot the fully-filled form so its final field set and
     # the OK button's enabled state can be verified before committing.
     if inspect:
-        filled_path = _xdg_state_dir() / "workday_dialog_filled.html"
+        filled_path = _xdg_dir("state") / "workday_dialog_filled.html"
         filled_path.write_text(await page.content(), encoding="utf-8")
         print(f"  [inspect] Filled-form HTML saved \u2192 {filled_path}")
         print("  [inspect] Check the panel in the browser (do NOT touch it),")
@@ -1347,7 +1355,7 @@ def cmd_get(month_str: str | None, auth_state: Path, config: Config, records: Re
             "Run 'time-entry login' first to save your session."
         )
     year, month = parse_month(month_str, date.today())
-    debug_path = _xdg_state_dir() / f"workday_debug_{year:04d}_{month:02d}.html"
+    debug_path = _xdg_dir("state") / f"workday_debug_{year:04d}_{month:02d}.html"
     entries = asyncio.run(_do_get(config.workday.time_entry_url, auth_state, year, month, debug_path))
     record = next((m for m in records.months if m.year == year and m.month == month), None)
     display_workday_get(year, month, entries, config, record)
@@ -1367,13 +1375,13 @@ def cmd_diff(month_str: str | None, auth_state: Path, config: Config, records: R
             "Run 'time-entry plan' first."
         )
 
-    debug_path = _xdg_state_dir() / f"workday_debug_{year:04d}_{month:02d}.html"
+    debug_path = _xdg_dir("state") / f"workday_debug_{year:04d}_{month:02d}.html"
     entries = asyncio.run(_do_get(config.workday.time_entry_url, auth_state, year, month, debug_path))
 
     plan = _plan_by_date(record, config)
     changes, matched, skipped = _compute_diff(entries, plan)
 
-    diff_path = _xdg_state_dir() / f"time-entry-diff-{year:04d}-{month:02d}.json"
+    diff_path = _xdg_dir("state") / f"time-entry-diff-{year:04d}-{month:02d}.json"
     display_diff(year, month, changes, matched, skipped, diff_path)
 
 
@@ -1386,7 +1394,7 @@ def cmd_apply(month_str: str | None, auth_state: Path, yes: bool, inspect: bool,
     year, month = parse_month(month_str, date.today())
 
     # Load changes from the diff JSON produced by 'diff'
-    diff_path = _xdg_state_dir() / f"time-entry-diff-{year:04d}-{month:02d}.json"
+    diff_path = _xdg_dir("state") / f"time-entry-diff-{year:04d}-{month:02d}.json"
     if not diff_path.exists():
         sys.exit(
             f"Diff file not found: {diff_path}\n"
@@ -1415,7 +1423,7 @@ def cmd_apply(month_str: str | None, auth_state: Path, yes: bool, inspect: bool,
     else:
         print(f"Applying {len(changes)} changes to Workday...\n")
 
-    debug_path = _xdg_state_dir() / f"workday_debug_{year:04d}_{month:02d}.html"
+    debug_path = _xdg_dir("state") / f"workday_debug_{year:04d}_{month:02d}.html"
     asyncio.run(_do_apply(
         config.workday.time_entry_url,
         auth_state,
@@ -1434,14 +1442,14 @@ def cmd_apply(month_str: str | None, auth_state: Path, yes: bool, inspect: bool,
 
 @click.group()
 @click.option("--config", "config_path", type=click.Path(path_type=Path),
-              default=lambda: _xdg_config_dir() / "config.toml",
+              default=lambda: _xdg_dir("config") / "config.toml",
               help="Config TOML (default: ~/.config/time-entry/config.toml)")
 @click.option("--records", "records_path", type=click.Path(path_type=Path),
-              default=lambda: _xdg_state_dir() / "time-entry.json",
+              default=lambda: _xdg_dir("state") / "time-entry.json",
               help="Records JSON (default: ~/.local/state/time-entry/time-entry.json)")
 @click.option("--dry-run", is_flag=True, help="Compute but do not save")
 @click.option("--auth-state", "auth_state", type=click.Path(path_type=Path),
-              default=lambda: _xdg_state_dir() / "time-entry-auth.json",
+              default=lambda: _xdg_dir("state") / "time-entry-auth.json",
               help="Playwright auth-state JSON (default: ~/.local/state/time-entry/time-entry-auth.json)")
 @click.pass_context
 def main(ctx, config_path, records_path, dry_run, auth_state):
@@ -1529,7 +1537,7 @@ def diff(ctx, month):
 @click.pass_context
 def apply(ctx, month, yes, inspect):
     """Apply diff JSON changes to Workday."""
-    config, records = _ctx_load(ctx)
+    config, _records = _ctx_load(ctx)
     cmd_apply(month, ctx.obj["auth_state"], yes, inspect, config)
 
 
