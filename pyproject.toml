@@ -23,6 +23,7 @@ manycron = "tools.manycron:cli"
 time-entry = "tools.time_entry:main"
 cmake-examine = "tools.cmake_examine:cli"
 bds = "tools.bds:cli"
+loop = "tools.loop:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -39,3 +40,5 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 tools = ["bundled_summaries.json"]
+
+
