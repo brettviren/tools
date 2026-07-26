@@ -171,7 +171,7 @@ def run_serial(lines: list[str]) -> bool:
     """Run each of *lines* sequentially via /bin/sh.  Return True if all succeeded."""
     ok = True
     for line in lines:
-        res = subprocess.run(["/bin/sh", "-c", line])
+        res = subprocess.run(["/bin/sh", "-c", line], check=False)
         ok = ok and res.returncode == 0
     return ok
 
@@ -182,7 +182,7 @@ def run_parallel(lines: list[str], njobs: int) -> bool:
         raise click.ClickException("GNU parallel not found in PATH; required for -j/--jobs")
     res = subprocess.run(
         ["parallel", "--keep-order", "-j", str(njobs)],
-        input="\n".join(lines), text=True,
+        input="\n".join(lines), text=True, check=False,
     )
     return res.returncode == 0
 
@@ -191,10 +191,10 @@ def run_parallel(lines: list[str], njobs: int) -> bool:
 # CLI
 # ---------------------------------------------------------------------------
 
-@click.command(context_settings=dict(
-    ignore_unknown_options=True,
-    help_option_names=["-h", "--help"],
-))
+@click.command(context_settings={
+    "ignore_unknown_options": True,
+    "help_option_names": ["-h", "--help"],
+})
 @click.option("-f", "--files", "mode", flag_value="files",
               help="<args> are glob patterns (** supported).")
 @click.option("-l", "--lines", "mode", flag_value="lines",

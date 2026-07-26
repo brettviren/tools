@@ -32,7 +32,7 @@ class Option:
 
 def run(args: list[str]) -> subprocess.CompletedProcess:
     """Run cmake with *args* and capture output."""
-    return subprocess.run(['cmake'] + args, capture_output=True, text=True)
+    return subprocess.run(['cmake'] + args, capture_output=True, text=True, check=False)
 
 
 def define_flags(defines: tuple[str, ...] | list[str]) -> list[str]:

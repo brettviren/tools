@@ -78,7 +78,7 @@ def collect_lines(table: dict, all_fragments: dict, _path: frozenset[str] = froz
 
 def ssh_crontab(connect: str | None, args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
     cmd = (["ssh", connect, "crontab"] if connect else ["crontab"]) + args
-    result = subprocess.run(cmd, input=stdin, capture_output=True, text=True)
+    result = subprocess.run(cmd, input=stdin, capture_output=True, text=True, check=False)
     return result.returncode, result.stdout, result.stderr
 
 
@@ -232,7 +232,7 @@ def diff(ctx, account):
              "--label", f"a/{name} (live)",
              "--label", f"b/{name} (proposed)",
              str(p1), str(p2)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         click.echo(result.stdout)
         p1.unlink()
@@ -318,7 +318,7 @@ def edit_cmd(ctx, target):
         tmp = Path(f.name)
 
     try:
-        result = subprocess.run([editor, str(tmp)])
+        result = subprocess.run([editor, str(tmp)], check=False)
         if result.returncode != 0:
             click.echo(f"Editor exited {result.returncode}, crontab not changed.", err=True)
             sys.exit(result.returncode)
@@ -477,7 +477,7 @@ def config_cmd(ctx, edit):
         config_path.parent.mkdir(parents=True, exist_ok=True)
         if not config_path.exists():
             config_path.write_text("")
-        result = subprocess.run([editor, str(config_path)])
+        result = subprocess.run([editor, str(config_path)], check=False)
         sys.exit(result.returncode)
 
     click.echo(_EXAMPLE_CONFIG, nl=False)

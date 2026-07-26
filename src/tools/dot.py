@@ -186,7 +186,7 @@ def write(
             )
         res = subprocess.run(
             ['dot', f'-T{ext}', str(dot_path), '-o', str(output_path)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if res.returncode != 0:
             raise RuntimeError(
