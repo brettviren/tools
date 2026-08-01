@@ -29,7 +29,7 @@ uv tools install -e .
 uv tools install -e --upgrade --force
 tools [...]
 #+end_example
-See also =install-hooks= under [[Cautions]].
+See also [[Cautions]] for enabling this repo's auto-reinstall-on-pull git hooks.
 
 Optionally, install man pages and completions:
 
@@ -51,7 +51,6 @@ bds                     Convenience wrapper around the Beads command `bd`.
 bee                     Upload data to the BEE event-visualization server
 bwrap-cwd               Run a command inside bwrap with only the CWD and select paths writable.
 claude-context-settings  merge Claude Code settings from ~/.claude up through the current directory
-clones                  Manage git repository clones across local and remote hosts.
 cmake-examine           Examine CMake-based source packages without modifying them.
 down                    Search for files or content using fzf-powered selection.
 kfz                     kitty split fuzzy file browser with icat/batcat preview
@@ -63,11 +62,13 @@ tools                   Manage the tools package: import scripts, generate compl
 
 * Multiple accounts
 
-Some of the tools (clones, manycron) only make sense to use when you have
+Some of the tools (=manycron=) only make sense to use when you have
 multiple user accounts across many computers.  To mange the configuration of
 these tools and various account configurations, using [[https://github.com/richih/vcsh][vcsh]] has served me well
-for many years.  In particular =clones= can handle vcsh (and [[https://www.passwordstore.org/][pass]]).  For multiple
-different git clones in one account, take a look at [[https://myrepos.branchable.com/][mr / MyRepos]].
+for many years.  For managing multiple git clones (including vcsh setups)
+across such accounts, see my separate =clones= package, which handles vcsh
+(and [[https://www.passwordstore.org/][pass]]).  For multiple different git clones in one account, take a look at
+[[https://myrepos.branchable.com/][mr / MyRepos]].
 
 * Cautions
 
@@ -79,7 +80,7 @@ The [[file:.bwrap-cwd]] in this modify the policy enacted by =bwrap-cwd= when th
 
 ** Auto-reinstall on pull
 
-When developing across several clones (see the =clones= tool), each clone needs
+When developing across several clones of this repo, each clone needs
 =uv tool install -e . --upgrade --force= re-run after a pull to expose new or
 changed tools on =$PATH=.  This repo ships git hooks under =.githooks/= that do
 this automatically after a pull touches =pyproject.toml=, =uv.lock= or =src/=.
@@ -89,20 +90,17 @@ used.  Enabling them sets =core.hooksPath=, which is per-clone local config and
 cannot itself be tracked.  Enable them with:
 
 #+begin_example
-$ scripts/install-hooks here   # this clone
-$ scripts/install-hooks all    # every clone in this package's clones group
+$ git -C /path/to/this/clone config core.hooksPath .githooks
 #+end_example
 
-=install-hooks all= must be run from within a clone of this package: it fans
-out via =clones run git config core.hooksPath .githooks=, letting =clones=
-infer the group from the current directory so it only touches sibling clones of
-this package — not every configured group (many of which are not Python
-packages).  Running that =clones run= line directly is equivalent.
+If you also use my separate =clones= package to manage multiple clones of
+this repo, its bundled =install-hooks= script does the above (plus a
+smudge-filter workaround for GitHub's imperfect org-mode rendering) and can
+fan the =core.hooksPath= setting out across every clone in one shot; see
+that package's README.
 
-Note: the hooks also fire on the remote side during =clones sync= (which pulls
-over ssh).  If =uv= is not on the non-interactive =$PATH= there, the hook prints
-a notice and skips; adjust the =PATH= fallback in =.githooks/_install= if your
-=uv= lives outside =~/.local/bin=.
-
-The =install-hooks= will also configure smudge filters needed to work-around GitHub's imperfect org-mode renderer.
+Note: the hooks also fire on the remote side during a sync over ssh (e.g. via
+the =clones= package's =sync= command).  If =uv= is not on the non-interactive
+=$PATH= there, the hook prints a notice and skips; adjust the =PATH= fallback
+in =.githooks/_install= if your =uv= lives outside =~/.local/bin=.
 

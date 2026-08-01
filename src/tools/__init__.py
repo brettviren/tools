@@ -231,7 +231,7 @@ def _iter_scripts(root: Path):
     """Yield (name, kind, path, module, fn) for each registered script, excluding 'tools'.
 
     Python scripts come from [project.scripts]; module/fn are the entry-point
-    spec split on ':' (e.g. 'tools.clones'/'cli' from 'tools.clones:cli').
+    spec split on ':' (e.g. 'tools.manycron'/'cli' from 'tools.manycron:cli').
     Bash scripts come from [tool.setuptools] script-files; module/fn are None.
     """
     _, doc = _load_pyproject(root)

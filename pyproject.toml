@@ -18,7 +18,6 @@ dependencies = [
 
 [project.scripts]
 tools = "tools:main"
-clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
 time-entry = "tools.time_entry:main"
 cmake-examine = "tools.cmake_examine:cli"
