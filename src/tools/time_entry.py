@@ -1453,7 +1453,21 @@ def cmd_apply(month_str: str | None, auth_state: Path, yes: bool, inspect: bool,
               help="Playwright auth-state JSON (default: ~/.local/state/time-entry/time-entry-auth.json)")
 @click.pass_context
 def main(ctx, config_path, records_path, dry_run, auth_state):
-    """Monthly time allocator for fiscal-year project reporting."""
+    """
+    Monthly time allocator for fiscal-year project reporting.
+
+    Run these sub-commands in sequence:
+
+    1. login        # Opens browser for auth
+
+    2. get          # Get current state
+
+    3. plan         # Local plan
+
+    4. diff         # Local diff
+
+    5. apply --yes  # Opens browser, omit --yes for dry-run.
+    """
     ctx.ensure_object(dict)
     ctx.obj.update(
         config_path=config_path,
