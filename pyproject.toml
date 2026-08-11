@@ -1,6 +1,6 @@
 [project]
 name = "tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "A collection of CLI tools"
 readme = {file = "README.org", content-type = "text/org"}
 license = {file = "LICENSE"}
@@ -12,15 +12,12 @@ dependencies = [
     "click>=8.1",
     "tomlkit>=0.12",
     "click-man>=0.4",
-    "playwright",
-
 ]
 
 [project.scripts]
 tools = "tools:main"
 clones = "tools.clones:cli"
 manycron = "tools.manycron:cli"
-time-entry = "tools.time_entry:main"
 cmake-examine = "tools.cmake_examine:cli"
 bds = "tools.bds:cli"
 loop = "tools.loop:main"
