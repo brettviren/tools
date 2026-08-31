@@ -9,7 +9,19 @@
 #   BWRAP_DEV  array of device files to bind with --dev-bind (e.g. GPU devices)
 #   BWRAP_NO   array of paths to hide (present as an empty directory inside)
 #   BWRAP_CMD  array holding the command line to run (default: bash)
-# All are optional.
+# All are optional. A profile or .bwrap-cwd file may also call the shell
+# function `bwrap_env <name> <value>` (see below) to set environment
+# variables inside the sandbox.
+#
+# Environment variables are injected into the sandboxed process via bwrap's
+# --setenv. Unlike the BWRAP_* arrays (which carry lists of values), env
+# settings are key/value pairs, so they are registered by calling the shell
+# function `bwrap_env <name> <value>` from a profile or .bwrap-cwd file, or
+# by passing -e/--env <NAME=VALUE> on the command line. Registrations
+# accumulate across every profile and .bwrap-cwd file in the same order the
+# binds are gathered (profiles in order, then .bwrap-cwd files root-most to
+# cwd-most), with -e/--env options appended last; if the same NAME is set
+# more than once the last registration wins.
 #
 # BWRAP_NO paths are hidden by mounting an empty tmpfs over each one (bwrap's
 # --tmpfs), so the path still exists but appears empty to processes in the
@@ -39,8 +51,9 @@
 # refreshed). Just before the command is run, the hint text is expanded
 # with envsubst, so it may reference BWRAP_CWD_RW, BWRAP_CWD_DEV and
 # BWRAP_CWD_NO (the final, comma-separated read-write bind, device bind and
-# hidden-path lists) as well as any other variable exported by a profile or
-# .bwrap-cwd file. A "$name" or "${name}" reference to an unset variable
+# hidden-path lists) and BWRAP_CWD_ENV (the comma-separated names of the
+# injected environment variables) as well as any other variable exported by
+# a profile or .bwrap-cwd file. A "$name" or "${name}" reference to an unset variable
 # expands to an empty string; a "$" not forming such a reference (not
 # followed by a name) passes through unchanged. Requires jq and envsubst.
 #
@@ -51,11 +64,28 @@
 # @option -d --dev-bind* <path> Extra device file to --dev-bind (repeatable)
 # @option -n --hide* <path>     Extra path to hide (present empty inside) (repeatable)
 # @option -u --unhide* <path>   Path to remove from the hide list, if present (repeatable)
+# @option -e --env* <NAME=VALUE> Environment variable to set inside the sandbox (repeatable)
 # @arg cmd*                     Command line to run (default: bash)
 
 set -euo pipefail
 
 config_dir=~/.config/bwrap-cwd
+
+# Register an environment variable to set inside the sandbox. Meant to be
+# called from a profile or .bwrap-cwd file (it is in scope while those are
+# sourced) as `bwrap_env <name> <value>`, giving a familiar command-style
+# interface for what is really a key/value pair. Registrations are stored
+# as "name=value" entries appended to the caller's `envs` array (visible
+# here by dynamic scope, since sourcing happens within _gather_config,
+# which runs within main/claude::hint where `envs` is local); _run splits
+# each entry on its first "=" and passes it to bwrap as --setenv. Later
+# registrations for the same name win because bwrap's last --setenv for a
+# name takes effect. Always returns 0 so a bare call at the tail of a
+# sourced config file cannot abort the script under `set -e`.
+bwrap_env() {
+    envs+=("$1=$2")
+    return 0
+}
 
 # Source a config file, populating BWRAP_RW, BWRAP_DEV and/or BWRAP_CMD.
 # Caller is expected to reset those arrays first; source itself only
@@ -173,11 +203,12 @@ _gather_config() {
     return 0
 }
 
-# Populate the caller's `binds`/`devs`/`nos` arrays: fixed default binds,
-# then _gather_config's contribution, then any -b/-d/-n command line
-# options, then any -u/--unhide removals. Caller must have declared
-# BWRAP_RW/BWRAP_DEV/BWRAP_NO/BWRAP_CMD and binds/devs/nos/cmd as local
-# arrays. Always returns 0: see _load_config for why a deterministic
+# Populate the caller's `binds`/`devs`/`nos`/`envs` arrays: fixed default
+# binds, then _gather_config's contribution (including any bwrap_env
+# calls), then any -b/-d/-n command line options, then any -u/--unhide
+# removals, then any -e/--env options. Caller must have declared
+# BWRAP_RW/BWRAP_DEV/BWRAP_NO/BWRAP_CMD and binds/devs/nos/envs/cmd as
+# local arrays. Always returns 0: see _load_config for why a deterministic
 # return matters when this is called bare (unguarded) elsewhere.
 _build_binds() {
     binds=(
@@ -195,6 +226,15 @@ _build_binds() {
     [[ -n "${argc_dev_bind[*]:-}" ]] && devs+=("${argc_dev_bind[@]}")
     [[ -n "${argc_hide[*]:-}" ]] && nos+=("${argc_hide[@]}")
 
+    # -e/--env options append last, after any bwrap_env from config files.
+    if [[ -n "${argc_env[*]:-}" ]]; then
+        local kv
+        for kv in "${argc_env[@]}"; do
+            [[ "$kv" == *=* ]] || { echo "bwrap-cwd: --env expects NAME=VALUE: $kv" >&2; exit 1; }
+            envs+=("$kv")
+        done
+    fi
+
     _canonicalize binds
     _canonicalize devs
     _canonicalize nos
@@ -204,15 +244,18 @@ _build_binds() {
 }
 
 # If BWRAP_CWD_CLAUDE_HINT is defined by now, export BWRAP_CWD_RW/
-# BWRAP_CWD_DEV/BWRAP_CWD_NO from the caller's finalized `binds`/`devs`/
-# `nos` arrays, expand the hint with envsubst, and print the result.
+# BWRAP_CWD_DEV/BWRAP_CWD_NO/BWRAP_CWD_ENV from the caller's finalized
+# `binds`/`devs`/`nos`/`envs` arrays, expand the hint with envsubst, and
+# print the result. BWRAP_CWD_ENV lists only the variable names (not their
+# values, which may be secret), each entry's "=value" suffix stripped.
 # Returns non-zero (no output) if no hint is defined.
 _resolve_hint() {
     [[ -n "${BWRAP_CWD_CLAUDE_HINT:-}" ]] || return 1
-    export BWRAP_CWD_RW BWRAP_CWD_DEV BWRAP_CWD_NO
+    export BWRAP_CWD_RW BWRAP_CWD_DEV BWRAP_CWD_NO BWRAP_CWD_ENV
     BWRAP_CWD_RW="$(_join ', ' "${binds[@]}")"
     BWRAP_CWD_DEV="$(_join ', ' "${devs[@]}")"
     BWRAP_CWD_NO="$(_join ', ' "${nos[@]}")"
+    BWRAP_CWD_ENV="$(_join ', ' "${envs[@]%%=*}")"
     printf '%s' "$BWRAP_CWD_CLAUDE_HINT" | envsubst
 }
 
@@ -253,16 +296,19 @@ _write_claude_hint() {
 }
 
 # Build and exec the bwrap invocation given the read-write binds, device
-# binds, hidden paths and command. Arguments are the read-write binds, then
-# "--dev--", then the device binds, then "--no--", then the hidden paths,
-# then "--", then the command line.
+# binds, hidden paths, environment settings and command. Arguments are the
+# read-write binds, then "--dev--", then the device binds, then "--no--",
+# then the hidden paths, then "--env--", then the "name=value" environment
+# settings, then "--", then the command line.
 _run() {
-    local -a binds=() devs=() nos=() cmd=()
+    local -a binds=() devs=() nos=() envs=() cmd=()
     while [[ "$1" != "--dev--" ]]; do binds+=("$1"); shift; done
     shift
     while [[ "$1" != "--no--" ]]; do devs+=("$1"); shift; done
     shift
-    while [[ "$1" != "--" ]]; do nos+=("$1"); shift; done
+    while [[ "$1" != "--env--" ]]; do nos+=("$1"); shift; done
+    shift
+    while [[ "$1" != "--" ]]; do envs+=("$1"); shift; done
     shift
     cmd=("$@")
 
@@ -283,13 +329,19 @@ _run() {
     for p in "${nos[@]}"; do
         args+=(--tmpfs "$p")
     done
+    # Environment settings: split each "name=value" on its first "=" so a
+    # value may itself contain "=" characters.
+    local kv
+    for kv in "${envs[@]}"; do
+        args+=(--setenv "${kv%%=*}" "${kv#*=}")
+    done
 
     exec bwrap "${args[@]}" -- "${cmd[@]}"
 }
 
 main() {
     local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
-    local -a binds=() devs=() nos=() cmd=()
+    local -a binds=() devs=() nos=() envs=() cmd=()
 
     _build_binds
 
@@ -308,7 +360,8 @@ main() {
         _write_claude_hint "$resolved_hint"
     fi
 
-    _run "${binds[@]}" --dev-- "${devs[@]}" --no-- "${nos[@]}" -- "${cmd[@]}"
+    _run "${binds[@]}" --dev-- "${devs[@]}" --no-- "${nos[@]}" \
+         --env-- "${envs[@]}" -- "${cmd[@]}"
 }
 
 # @cmd Claude Code integration helpers.
@@ -336,7 +389,7 @@ claude() { :; }
 #   they can add it with -b <path> or in a profile/.bwrap-cwd file.'
 claude::hint() {
     local -a BWRAP_RW=() BWRAP_DEV=() BWRAP_NO=() BWRAP_CMD=()
-    local -a binds=() devs=() nos=() cmd=()
+    local -a binds=() devs=() nos=() envs=() cmd=()
 
     _build_binds
 
