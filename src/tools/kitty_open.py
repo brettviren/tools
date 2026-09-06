@@ -1,57 +1,5 @@
-#!/usr/bin/env python3
-"""kitty-open: push a remote file/dir to the local machine and open it there.
+"""kitty-open: push a remote file/dir to the local machine and open it there."""
 
-The SAME script runs in two roles, on two machines:
-
-  push (default)  -- run in a remote shell:
-                        kitty-open somefile.png
-                        kitty-open ~/work/A/plots/          # a directory
-                      It transfers the path to a flat local staging area via
-                      `kitten transfer`, then asks the local kitty instance
-                      (over the forwarded remote-control socket) to re-invoke
-                      this same script in dispatch mode.
-
-  dispatch (internal) -- invoked locally by `kitty @ launch`, never typed by
-                      hand. Applies local MAPPINGS/DISPATCH config to decide
-                      the real destination directory and the app to open it
-                      with, then execs that app.
-
----------------------------------------------------------------------------
-One-time LOCAL setup (the machine you sit in front of):
-
-  1. kitty.conf:
-         allow_remote_control socket-only
-         listen_on unix:/tmp/kitty-rc
-         file_transfer_confirmation_bypass <password-or-file-per-kitty-docs>
-
-  2. kitty's ssh.conf (or per-host block), so the RC socket gets forwarded
-     over each ssh session using the `ssh` kitten:
-         forward_remote_control yes
-
-  3. Install this script at the same PATH-visible location on BOTH machines,
-     e.g. ~/.local/bin/kitty-open (that's what makes "sync the one file
-     between endpoints" work). LOCAL_SCRIPT below must match that path.
-
-  4. Put the SAME bypass password/secret in ~/.config/kitty-open/transfer.pass
-     (chmod 600) on both machines -- consult `kitten transfer --help` and the
-     kitty.conf docs for the exact accepted forms (literal password vs.
-     file-path vs. fd number); untested here.
-
-  5. Run `kitty-open --init` once, locally, to create the stage directory
-     and a starter ~/.config/kitty-open/config.py.
-
-  6. Edit ~/.config/kitty-open/config.py locally to add MAPPINGS / DISPATCH
-     rules (e.g. route remote:~/work/A/* to ~/dropbox/A).
-
-Known rough edges to verify before relying on this (see inline notes):
-  - whether kitty actually expands a leading "~/" in the `kitten transfer`
-    destination against the LOCAL home directory (docs strongly imply yes
-    via its differing-home-directory handling, but untested here).
-  - the mkdir-before-transfer step for directories is fire-and-forget with
-    a fixed sleep, not a true synchronous wait on the remote-control call.
-"""
-
-import argparse
 import fnmatch
 import logging
 import os
@@ -62,6 +10,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+import click
 
 log = logging.getLogger("kitty-open")
 
@@ -98,10 +48,14 @@ DEFAULT_APP = "xdg-open"
 '''
 
 
-def setup_logging(level_name: str):
+# ---------------------------------------------------------------------------
+# Library functions
+# ---------------------------------------------------------------------------
+
+def setup_logging(level_name: str) -> None:
     level = logging.getLevelName(level_name.upper())
     if not isinstance(level, int):
-        raise SystemExit(f"kitty-open: invalid --log-level: {level_name}")
+        raise click.BadParameter(f"invalid log level: {level_name!r}")
     logging.basicConfig(
         stream=sys.stderr,
         level=level,
@@ -115,11 +69,11 @@ def setup_logging(level_name: str):
               os.environ.get("SSH_CONNECTION"))
 
 
-def load_local_config():
+def load_local_config() -> dict:
     ns = {"MAPPINGS": [], "DISPATCH": {}, "DEFAULT_APP": "xdg-open"}
     if CONFIG_FILE.exists():
         code = CONFIG_FILE.read_text()
-        exec(compile(code, str(CONFIG_FILE), "exec"), ns)
+        exec(compile(code, str(CONFIG_FILE), "exec"), ns)  # noqa: S102 -- config is deliberately just Python
     return ns
 
 
@@ -150,7 +104,7 @@ def find_dotfile(start: Path) -> dict:
     return {}
 
 
-def local_launch(argv: list[str]):
+def local_launch(argv: list[str]) -> subprocess.CompletedProcess:
     """Run argv on the LOCAL machine via the forwarded remote-control socket,
     through /bin/sh -c so a leading '~' in any argv[0] path expands correctly
     against the local $HOME, without depending on kitty's own PATH."""
@@ -158,7 +112,7 @@ def local_launch(argv: list[str]):
     launch_cmd = ["kitty", "@", "launch", "--type=background", "--dont-take-focus", "--",
                   "/bin/sh", "-c", shell_cmd]
     log.debug("local_launch: %r", launch_cmd)
-    result = subprocess.run(launch_cmd, capture_output=True, text=True)
+    result = subprocess.run(launch_cmd, capture_output=True, text=True, check=False)
     log.debug("local_launch returncode=%d stdout=%r stderr=%r",
               result.returncode, result.stdout.strip(), result.stderr.strip())
     if result.returncode != 0:
@@ -170,9 +124,15 @@ def local_launch(argv: list[str]):
 
 # ---------------------------------------------------------------- push mode
 
-def run_push(args):
-    host = args.host or socket.gethostname()
-    log.debug("run_push: host=%r paths=%r", host, args.paths)
+def run_push(
+    paths: list[str],
+    host: str | None,
+    dest: str | None,
+    app: str | None,
+    no_open: bool,
+) -> None:
+    host = host or socket.gethostname()
+    log.debug("run_push: host=%r paths=%r", host, paths)
 
     bypass_arg = []
     if PASS_FILE.exists():
@@ -181,7 +141,7 @@ def run_push(args):
     else:
         log.debug("no bypass password file at %s -- expect a confirmation popup", PASS_FILE)
 
-    for raw_path in args.paths:
+    for raw_path in paths:
         remote_path = str(Path(raw_path).resolve())
         log.debug("pushing %s", remote_path)
         if not Path(remote_path).exists():
@@ -189,8 +149,8 @@ def run_push(args):
             continue
 
         cfg = find_dotfile(Path(remote_path))
-        dest_override = args.dest or cfg.get("dest")
-        app_override = args.app or cfg.get("app")
+        dest_override = dest or cfg.get("dest")
+        app_override = app or cfg.get("app")
         is_dir = Path(remote_path).is_dir()
         name = stage_name(host, remote_path)
         log.debug("dest_override=%r app_override=%r is_dir=%s stage_name=%r",
@@ -210,13 +170,13 @@ def run_push(args):
         transfer_cmd = ["kitten", "transfer", *bypass_arg, remote_path, stage_path]
         log.debug("transferring to %s", stage_path)
         log.debug("transfer_cmd=%r", transfer_cmd)
-        result = subprocess.run(transfer_cmd)
+        result = subprocess.run(transfer_cmd, check=False)
         log.debug("kitten transfer returncode=%d", result.returncode)
         if result.returncode != 0:
             log.error("transfer failed for %s (rc=%d)", remote_path, result.returncode)
             continue
 
-        if args.no_open:
+        if no_open:
             log.debug("--no-open set, skipping dispatch")
             continue
 
@@ -238,7 +198,7 @@ def guess_app(path: Path, cfg: dict) -> str:
 
 
 def run_dispatch(stage_path: str, remote_host: str, remote_path: str,
-                  dest_override: str | None, app_override: str | None):
+                  dest_override: str | None, app_override: str | None) -> None:
     log.debug("run_dispatch: stage_path=%r remote_host=%r remote_path=%r dest_override=%r app_override=%r",
               stage_path, remote_host, remote_path, dest_override, app_override)
     cfg = load_local_config()
@@ -287,7 +247,7 @@ def run_dispatch(stage_path: str, remote_host: str, remote_path: str,
 
 # --------------------------------------------------------------------- init
 
-def run_init():
+def run_init() -> None:
     log.debug("run_init: stage_root=%s config_file=%s", DEFAULT_STAGE_ROOT, CONFIG_FILE)
     DEFAULT_STAGE_ROOT.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -301,34 +261,91 @@ def run_init():
 
 # ---------------------------------------------------------------------- cli
 
-def main():
-    p = argparse.ArgumentParser(prog="kitty-open")
-    p.add_argument("--init", action="store_true", help="local one-time setup")
-    p.add_argument("--dispatch", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--dest", help="override destination directory")
-    p.add_argument("--app", help="override app/command to open with")
-    p.add_argument("--host", help="override remote host id (push mode only)")
-    p.add_argument("--no-open", action="store_true", help="transfer only, don't open")
-    p.add_argument("-L", "--log-level", default="warning",
-                    help="logging level: debug, info, warning, error (default: warning, i.e. silent)")
-    p.add_argument("rest", nargs="*", help="path(s) to push, or dispatch's internal args")
-    args = p.parse_args()
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--init", is_flag=True, help="One-time local setup: create the stage directory and a starter config.")
+@click.option("--dispatch", is_flag=True, hidden=True,
+              help="Internal: invoked locally by `kitty @ launch`, never typed by hand.")
+@click.option("--dest", default=None, metavar="DIR", help="Override destination directory.")
+@click.option("--app", default=None, metavar="CMD", help="Override the app/command used to open the file.")
+@click.option("--host", default=None, help="Override the remote host id (push mode only).")
+@click.option("--no-open", "no_open", is_flag=True, help="Transfer only, don't open.")
+@click.option("-L", "--log-level", default="warning", show_default=True,
+              help="Logging level: debug, info, warning, error.")
+@click.argument("paths", nargs=-1)
+def main(init: bool, dispatch: bool, dest: str | None, app: str | None, host: str | None,
+         no_open: bool, log_level: str, paths: tuple[str, ...]) -> None:
+    """Push a remote file/dir to the local machine and open it there.
 
-    setup_logging(args.log_level)
+    The SAME script runs in two roles, on two machines:
 
-    if args.init:
+    \b
+      push (default) -- run in a remote shell:
+        kitty-open somefile.png
+        kitty-open ~/work/A/plots/          # a directory
+      It transfers the path to a flat local staging area via `kitten
+      transfer`, then asks the local kitty instance (over the forwarded
+      remote-control socket) to re-invoke this same script in dispatch mode.
+
+    \b
+      dispatch (internal, --dispatch) -- invoked locally by `kitty @
+      launch`, never typed by hand. Applies local MAPPINGS/DISPATCH config
+      to decide the real destination directory and the app to open it with,
+      then execs that app.
+
+    \b
+    One-time LOCAL setup (the machine you sit in front of):
+    \b
+      1. kitty.conf:
+             allow_remote_control socket-only
+             listen_on unix:/tmp/kitty-rc
+             file_transfer_confirmation_bypass <password-or-file-per-kitty-docs>
+    \b
+      2. kitty's ssh.conf (or per-host block), so the RC socket gets
+         forwarded over each ssh session using the `ssh` kitten:
+             forward_remote_control yes
+    \b
+      3. Install this script at the same PATH-visible location on BOTH
+         machines, e.g. ~/.local/bin/kitty-open (that's what makes "sync
+         the one file between endpoints" work). LOCAL_SCRIPT in the source
+         must match that path.
+    \b
+      4. Put the SAME bypass password/secret in
+         ~/.config/kitty-open/transfer.pass (chmod 600) on both machines --
+         consult `kitten transfer --help` and the kitty.conf docs for the
+         exact accepted forms (literal password vs. file-path vs. fd
+         number); untested here.
+    \b
+      5. Run `kitty-open --init` once, locally, to create the stage
+         directory and a starter ~/.config/kitty-open/config.py.
+    \b
+      6. Edit ~/.config/kitty-open/config.py locally to add MAPPINGS /
+         DISPATCH rules (e.g. route remote:~/work/A/* to ~/dropbox/A).
+
+    \b
+    Known rough edges to verify before relying on this (see inline notes):
+      - whether kitty actually expands a leading "~/" in the `kitten
+        transfer` destination against the LOCAL home directory (docs
+        strongly imply yes via its differing-home-directory handling, but
+        untested here).
+      - the mkdir-before-transfer step for directories is fire-and-forget
+        with a fixed sleep, not a true synchronous wait on the
+        remote-control call.
+    """
+    setup_logging(log_level)
+
+    if init:
         run_init()
         return
 
-    if args.dispatch:
-        stage_path, remote_host, remote_path = args.rest[:3]
-        run_dispatch(stage_path, remote_host, remote_path, args.dest, args.app)
+    if dispatch:
+        stage_path, remote_host, remote_path = paths[:3]
+        run_dispatch(stage_path, remote_host, remote_path, dest, app)
         return
 
-    if not args.rest:
-        p.error("no file or directory given")
-    args.paths = args.rest
-    run_push(args)
+    if not paths:
+        raise click.UsageError("no file or directory given")
+
+    run_push(list(paths), host, dest, app, no_open)
 
 
 if __name__ == "__main__":

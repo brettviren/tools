@@ -20,6 +20,8 @@ manycron = "tools.manycron:cli"
 cmake-examine = "tools.cmake_examine:cli"
 bds = "tools.bds:cli"
 loop = "tools.loop:main"
+fix = "tools.fix.__main__:main"
+kitty-open = "tools.kitty_open:main"
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -28,9 +30,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 script-files = [
              "scripts/kfz", "scripts/claude-context-settings",
-             "scripts/down", "scripts/bee", 
-             "scripts/kitty-agent-title", "scripts/bwrap-cwd",
-             "scripts/kitty-open"
+             "scripts/down", "scripts/bee",
+             "scripts/kitty-agent-title", "scripts/bwrap-cwd"
 ]
 
 [tool.setuptools.packages.find]
@@ -38,5 +39,13 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 tools = ["bundled_summaries.json"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
 
 

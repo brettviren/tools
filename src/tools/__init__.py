@@ -227,23 +227,36 @@ def _man_dir() -> Path:
     return Path.home() / ".local/share/man/man1"
 
 
-def _iter_scripts(root: Path):
-    """Yield (name, kind, path, module, fn) for each registered script, excluding 'tools'.
+_OWN_PACKAGE = __name__.split(".")[0]
 
-    Python scripts come from [project.scripts]; module/fn are the entry-point
-    spec split on ':' (e.g. 'tools.manycron'/'cli' from 'tools.manycron:cli').
-    Bash scripts come from [tool.setuptools] script-files; module/fn are None.
+
+def _iter_scripts():
+    """Yield (name, kind, module_or_path, fn) for each registered script, excluding 'tools'.
+
+    Python scripts come from this distribution's own installed console_scripts
+    entry points (importlib.metadata) rather than a re-parse of
+    [project.scripts]: pyproject.toml is still the single source of truth
+    (that's what the build backend read to produce these entry points), but
+    reading it back via packaging metadata means whatever module:fn actually
+    resolves at runtime is exactly what gets used here too -- no separate
+    guess at a source file path, which is what previously made script-per-tool
+    directories (e.g. tools.fix.__main__) show up as "[missing]".
+
+    Bash scripts have no packaging-metadata equivalent of an entry point, so
+    those still come from [tool.setuptools] script-files; module_or_path is
+    the script's path in that case, fn is None.
     """
-    _, doc = _load_pyproject(root)
-    for name, ep in doc.get("project", {}).get("scripts", {}).items():
-        if name == "tools":
+    dist = importlib.metadata.distribution(_OWN_PACKAGE)
+    for ep in dist.entry_points:
+        if ep.group != "console_scripts" or ep.name == "tools":
             continue
-        module, fn = ep.rsplit(":", 1)
-        mod_leaf = module.split(".")[-1]
-        yield name, "python", root / "src" / "tools" / f"{mod_leaf}.py", module, fn
+        yield ep.name, "python", ep.module, ep.attr
+
+    root = _find_root()
+    _, doc = _load_pyproject(root)
     for sf in doc.get("tool", {}).get("setuptools", {}).get("script-files", []):
         path = root / sf
-        yield path.name, "bash", path, None, None
+        yield path.name, "bash", path, None
 
 
 # ── PEP 723 helpers ────────────────────────────────────────────────────────────
@@ -670,14 +683,13 @@ def completions(shell: str | None) -> None:
     if shell is None:
         shell = _detect_shell()
 
-    root = _find_root()
     outdir = _completion_dir(shell)
     outdir.mkdir(parents=True, exist_ok=True)
     click.echo(f"Shell: {shell}  →  {outdir}")
 
     _gen_click_completion("tools", shell, outdir)
 
-    for name, kind, path, _module, _fn in _iter_scripts(root):
+    for name, kind, path, _fn in _iter_scripts():
         if kind == "bash":
             _gen_argc_completion(path, shell, name, outdir)
         else:
@@ -691,19 +703,17 @@ def manpages() -> None:
     Output is written to ~/.local/share/man/man1/.
     Bash scripts use 'argc --argc-mangen'; Python scripts use click-man.
     """
-    root = _find_root()
     outdir = _man_dir()
     outdir.mkdir(parents=True, exist_ok=True)
     click.echo(f"Man pages → {outdir}")
 
     _gen_click_manpage("tools", "tools", "main", outdir)
 
-    for name, kind, path, _module, fn in _iter_scripts(root):
+    for name, kind, mod_or_path, fn in _iter_scripts():
         if kind == "bash":
-            _gen_argc_manpage(path, name, outdir)
+            _gen_argc_manpage(mod_or_path, name, outdir)
         else:
-            mod_leaf = path.stem
-            _gen_click_manpage(name, f"tools.{mod_leaf}", fn, outdir)
+            _gen_click_manpage(name, mod_or_path, fn, outdir)
 
 
 @main.command()
@@ -719,20 +729,19 @@ def summary() -> None:
     bundled_summaries.json entry is flagged too (marked with U+F127, meaning:
     go delete that entry).  Tools with no description are marked [missing].
     """
-    root = _find_root()
     col = 22
 
     tools_desc = (main.help or "").splitlines()[0].strip()
     rows = [("tools", tools_desc)]
 
-    for name, kind, path, module, fn in _iter_scripts(root):
+    for name, kind, mod_or_path, fn in _iter_scripts():
         if kind == "bash":
-            native, _needs_llm = _bash_description(path)
+            native, _needs_llm = _bash_description(mod_or_path)
             desc, _missing = _with_bundled_fallback(name, native)
-        elif path.exists():
-            desc, _missing = _python_description(f"tools.{path.stem}", fn)
+        elif mod_or_path.split(".")[0] == _OWN_PACKAGE:
+            desc, _missing = _python_description(mod_or_path, fn)
         else:
-            desc, _missing = _external_description(name, module)
+            desc, _missing = _external_description(name, mod_or_path)
 
         rows.append((name, desc if desc else "[missing]"))
 

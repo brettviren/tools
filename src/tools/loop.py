@@ -191,7 +191,34 @@ def run_parallel(lines: list[str], njobs: int) -> bool:
 # CLI
 # ---------------------------------------------------------------------------
 
-@click.command(context_settings={
+class LoopCommand(click.Command):
+    """A click.Command that splits argv on the first literal '--'.
+
+    Everything before it is parsed normally (as <iter> options/args);
+    everything after is stashed verbatim on ctx.obj as <body>, bypassing
+    option/argument parsing entirely.  This has to happen before Click's own
+    parser sees the args: with ignore_unknown_options + a single nargs=-1
+    argument, Click's native '--' handling would otherwise merge both sides
+    into one flat list, losing the boundary between them.
+
+    A bare invocation (no args at all) is rewritten to `--help` here rather
+    than via Click's own `no_args_is_help`, whose newer versions treat it as
+    a usage *error* (stderr, exit 2); this keeps it the same as asking for
+    help on purpose (stdout, exit 0).
+    """
+
+    def parse_args(self, ctx, args):
+        if not args:
+            args = ["--help"]
+        if "--" in args:
+            i = args.index("--")
+            args, ctx.obj = args[:i], args[i + 1:]
+        else:
+            ctx.obj = []
+        return super().parse_args(ctx, args)
+
+
+@click.command(cls=LoopCommand, context_settings={
     "ignore_unknown_options": True,
     "help_option_names": ["-h", "--help"],
 })
@@ -217,7 +244,7 @@ def run_parallel(lines: list[str], njobs: int) -> bool:
               help="Redirect each item's stderr to PATTERN (%d, {} substituted).")
 @click.argument("iter_args", nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def cli(ctx, mode, jobs, shell, delim, out_pattern, err_pattern, iter_args):
+def main(ctx, mode, jobs, shell, delim, out_pattern, err_pattern, iter_args):
     """Run <body> once per iteration item, substituting "{}" with the item.
 
     \b
@@ -239,18 +266,6 @@ def cli(ctx, mode, jobs, shell, delim, out_pattern, err_pattern, iter_args):
     njobs = resolve_njobs(jobs, len(items))
     ok = run_parallel(lines, njobs) if njobs else run_serial(lines)
     sys.exit(0 if ok else 1)
-
-
-def main():
-    argv = sys.argv[1:]
-    if not argv:
-        argv = ["--help"]
-    if "--" in argv:
-        i = argv.index("--")
-        head, body = argv[:i], argv[i + 1:]
-    else:
-        head, body = argv, []
-    cli(args=head, obj=body)
 
 
 if __name__ == "__main__":
