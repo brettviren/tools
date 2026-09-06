@@ -10,3 +10,14 @@ wheels/
 .venv
 *~
 .claude
+# BEGIN fix:pyproject
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+# END fix:pyproject
