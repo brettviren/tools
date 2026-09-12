@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# @describe Flip the kitty terminal between "light" and "dark" mode.
+#   With no argument, flips from whatever mode is currently active.
+#   With "light" or "dark", flips to that mode regardless of current state.
+#   A mode is defined by which of the background/foreground colors is
+#   darker.  When flipping to a mode for which a theme file was given via
+#   --light/--dark, that theme is applied; otherwise the background and
+#   foreground colors are simply exchanged.
+# @option --light <file>  Kitty theme (conf) file to use for light mode
+# @option --dark <file>  Kitty theme (conf) file to use for dark mode
+# @arg mode[light|dark]  Mode to flip to (default: flip from current mode)
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+set -euo pipefail
+
+_require_kitten() {
+    command -v kitten &>/dev/null || {
+        echo "kitty-flip: 'kitten' not found in PATH" >&2
+        exit 1
+    }
+}
+
+# Current value of a named color (e.g. "background", "foreground").
+_get_color() {
+    local name="$1"
+    kitten @ get-colors | awk -v n="$name" '$1==n{print $2}'
+}
+
+# Perceptual brightness of a "#rrggbb" color, 0-255.
+_brightness() {
+    local hex="${1#\#}"
+    local r=$((16#${hex:0:2})) g=$((16#${hex:2:2})) b=$((16#${hex:4:2}))
+    echo $(( (299*r + 587*g + 114*b) / 1000 ))
+}
+
+# bg brighter than (or equal to) fg is called "light", otherwise "dark".
+_current_mode() {
+    local bg_b="$1" fg_b="$2"
+    (( bg_b >= fg_b )) && echo light || echo dark
+}
+
+_opposite() {
+    [[ "$1" == light ]] && echo dark || echo light
+}
+
+_set_colors() {
+    kitten @ set-colors --match-tab "window_id:${KITTY_WINDOW_ID:?not running inside kitty}" "$@"
+}
+
+_swap_colors() {
+    local bg="$1" fg="$2"
+    _set_colors "background=${fg}" "foreground=${bg}"
+}
+
+_apply_theme() {
+    local file="$1"
+    [[ -r "$file" ]] || {
+        echo "kitty-flip: theme file not readable: $file" >&2
+        exit 1
+    }
+    _set_colors "$file"
+}
+
+_flip() {
+    local mode_arg="${1:-}" light_theme="${2:-}" dark_theme="${3:-}"
+    local bg fg bg_b fg_b current target theme
+
+    bg=$(_get_color background)
+    fg=$(_get_color foreground)
+    [[ -n "$bg" && -n "$fg" ]] || {
+        echo "kitty-flip: could not read current colors" >&2
+        exit 1
+    }
+
+    bg_b=$(_brightness "$bg")
+    fg_b=$(_brightness "$fg")
+    current=$(_current_mode "$bg_b" "$fg_b")
+
+    if [[ -n "$mode_arg" ]]; then
+        target="$mode_arg"
+        [[ "$target" == "$current" ]] && return 0
+    else
+        target=$(_opposite "$current")
+    fi
+
+    case "$target" in
+        light) theme="$light_theme" ;;
+        dark)  theme="$dark_theme" ;;
+    esac
+
+    if [[ -n "$theme" ]]; then
+        _apply_theme "$theme"
+    else
+        _swap_colors "$bg" "$fg"
+    fi
+}
+
+_require_kitten
+eval "$(argc --argc-eval "$0" "$@")"
+_flip "${argc_mode:-}" "${argc_light:-}" "${argc_dark:-}"

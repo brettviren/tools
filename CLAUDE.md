@@ -17,6 +17,9 @@ uv run pytest [pytest options]  # run the test suite
 uv tool install -e .            # install to user's area in editable form
 ```
 
+A new Python CLI or a new script must be registered in `pyproject.toml`.
+
+
 # CLI Guidelines
 
 Generally, but with some exceptions:

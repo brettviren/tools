@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# @describe Flip the fish "tide" prompt between "light" and "dark" mode.
+#   Unlike a terminal, tide has no single foreground/background pair to
+#   swap: it has one shared segment background color plus ~30 independent
+#   per-segment foreground colors, all stored as fish universal variables
+#   (tide_*).  So, unlike kitty-flip, there is no themeless default: a
+#   theme file must be given for whichever mode is the flip target via
+#   --light/--dark.  Use "--dump" to capture the current tide colors
+#   (after running "tide configure") into a theme file.
+#   Current mode is detected from the brightness of tide_git_bg_color,
+#   tide's shared segment background color.
+# @option --light <file>  Theme file (from --dump) to apply for light mode
+# @option --dark <file>  Theme file (from --dump) to apply for dark mode
+# @option --dump <file>  Dump current tide colors to file, then exit
+# @arg mode[light|dark]  Mode to flip to (default: flip from current mode)
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+set -euo pipefail
+
+mode_anchor_var=tide_git_bg_color
+
+_require_fish() {
+    command -v fish &>/dev/null || {
+        echo "tide-flip: 'fish' not found in PATH" >&2
+        exit 1
+    }
+}
+
+_get_var() {
+    local name="$1"
+    fish -c "echo \$$name"
+}
+
+# Perceptual brightness of a "rrggbb" (no '#') color, 0-255.
+_brightness() {
+    local hex="${1#\#}"
+    local r=$((16#${hex:0:2})) g=$((16#${hex:2:2})) b=$((16#${hex:4:2}))
+    echo $(( (299*r + 587*g + 114*b) / 1000 ))
+}
+
+_current_mode() {
+    local color brightness
+    color=$(_get_var "$mode_anchor_var")
+    [[ "$color" =~ ^[0-9A-Fa-f]{6}$ ]] || {
+        echo "tide-flip: could not detect current mode from \$$mode_anchor_var='$color'" >&2
+        exit 1
+    }
+    brightness=$(_brightness "$color")
+    (( brightness >= 128 )) && echo light || echo dark
+}
+
+_opposite() {
+    [[ "$1" == light ]] && echo dark || echo light
+}
+
+_dump() {
+    local file="$1"
+    fish -c '
+        for v in (set -U --names | string match --entire --regex "^tide_")
+            printf "set -U %s" $v
+            for val in $$v
+                printf " %s" (string escape -- $val)
+            end
+            printf "\n"
+        end
+    ' > "$file"
+    echo "tide-flip: dumped current tide colors to $file"
+}
+
+_apply_theme() {
+    local file="$1"
+    [[ -r "$file" ]] || {
+        echo "tide-flip: theme file not readable: $file" >&2
+        exit 1
+    }
+    fish -c 'source $argv[1]' "$file"
+}
+
+_flip() {
+    local mode_arg="${1:-}" light_theme="${2:-}" dark_theme="${3:-}"
+    local current target theme
+
+    current=$(_current_mode)
+
+    if [[ -n "$mode_arg" ]]; then
+        target="$mode_arg"
+        [[ "$target" == "$current" ]] && return 0
+    else
+        target=$(_opposite "$current")
+    fi
+
+    case "$target" in
+        light) theme="$light_theme" ;;
+        dark)  theme="$dark_theme" ;;
+    esac
+
+    [[ -n "$theme" ]] || {
+        echo "tide-flip: no theme given for target mode '$target'; supply --$target=<file>" >&2
+        exit 1
+    }
+
+    _apply_theme "$theme"
+}
+
+_require_fish
+eval "$(argc --argc-eval "$0" "$@")"
+
+if [[ -n "${argc_dump:-}" ]]; then
+    _dump "${argc_dump}"
+else
+    _flip "${argc_mode:-}" "${argc_light:-}" "${argc_dark:-}"
+fi

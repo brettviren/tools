@@ -31,7 +31,9 @@ build-backend = "setuptools.build_meta"
 script-files = [
              "scripts/kfz", "scripts/claude-context-settings",
              "scripts/down", "scripts/bee",
-             "scripts/kitty-agent-title", "scripts/bwrap-cwd"
+             "scripts/kitty-agent-title", 
+             "scripts/kitty-flip", 
+             "scripts/bwrap-cwd"
 ]
 
 [tool.setuptools.packages.find]
