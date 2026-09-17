@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# @describe Run claude under bwrap-cwd so herdr detects it as a claude agent.
+#
+# herdr names the agent in a pane from that pane's foreground process, which
+# for a sandboxed claude is bwrap, not claude.  Setting HERDR_AGENT on the
+# wrapper process tells herdr which agent screen manifest to use instead.
+# The variable must be set outside the sandbox, where herdr can read it off
+# the wrapper; `bwrap-cwd -e HERDR_AGENT=claude` sets it inside, too late.
+#
+# All arguments are passed through to bwrap-cwd, after a -p claude that puts
+# the claude profile first.  So per-task sandbox tweaks are just bwrap-cwd
+# options:
+#
+#   hclaude                              # claude profile alone
+#   hclaude -b ~/dev/wct                 # plus another writable path
+#   hclaude -p gpu                       # stack another profile (later wins)
+#   hclaude -u ~/.ssh                    # unhide a path the profile hides
+#
+# A positional command replaces the profile's BWRAP_CMD rather than adding
+# to it, so extra claude flags mean spelling out the whole command line:
+#
+#   hclaude -b ~/dev/wct claude --dangerously-skip-permissions --resume
+#
+# Unlike the other scripts here this one does not use argc: every option
+# belongs to bwrap-cwd, and argc would consume -p/-b/-h before it could be
+# forwarded.
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Brett Viren <brett.viren@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+set -euo pipefail
+
+agent=claude
+profile=claude
+
+_help() {
+    cat <<'HELP' >&2
+USAGE: hclaude [bwrap-cwd options] [command...]
+
+Runs: env HERDR_AGENT=claude bwrap-cwd -p claude [args...]
+
+Every argument is forwarded to bwrap-cwd, so see `bwrap-cwd --help` for the
+options.  The HERDR_AGENT hint lets herdr see the sandboxed claude as a
+claude agent instead of as an unrecognized bwrap process.
+HELP
+}
+
+_run() {
+    exec env "HERDR_AGENT=$agent" bwrap-cwd -p "$profile" "$@"
+}
+
+case "${1:-}" in
+    -h|--help) _help; exit 0 ;;
+esac
+
+_run "$@"
