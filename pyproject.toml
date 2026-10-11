@@ -12,6 +12,8 @@ dependencies = [
     "click>=8.1",
     "tomlkit>=0.12",
     "click-man>=0.4",
+    "numpy>=2.5.3",
+    "pathspec>=1.1.1",
 ]
 
 [project.scripts]
@@ -23,6 +25,20 @@ loop = "tools.loop:main"
 fix = "tools.fix.__main__:main"
 kitty-open = "tools.kitty_open:main"
 gitea-mirror = "tools.gitea_mirror.__main__:main"
+egs = "tools.egs.__main__:main"
+
+[project.optional-dependencies]
+transformers = [
+    "av>=19.0.1",
+    "librosa>=1.0.0",
+    "pillow>=12.3.0",
+    "sentence-transformers>=6.1.0",
+    "soundfile>=0.14.0",
+    "torch",
+    "torchcodec>=0.17.0",
+    "torchvision>=0.29.1",
+    "transformers>=5.19",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -53,3 +69,13 @@ dev = [
 testpaths = ["test"]
 
 
+
+# Driver-compatible CUDA 12.x wheels; PyPI torch is built for CUDA 13.
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
