@@ -26,6 +26,7 @@ fix = "tools.fix.__main__:main"
 kitty-open = "tools.kitty_open:main"
 gitea-mirror = "tools.gitea_mirror.__main__:main"
 egs = "tools.egs.__main__:main"
+claude-artifacts = "tools.claude_artifacts.__main__:main"
 
 [project.optional-dependencies]
 transformers = [
@@ -53,6 +54,11 @@ script-files = [
              "scripts/bwrap-cwd",
              "scripts/hclaude"
 ]
+
+# Claude Code skills, shipped in wheels under <prefix>/share/tools/skills.  A wheel
+# cannot write to ~/.claude, so `tools install-skills` puts them in place.
+[tool.setuptools.data-files]
+"share/tools/skills/backup-claude-artifacts" = ["skills/backup-claude-artifacts/SKILL.md"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

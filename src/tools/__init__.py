@@ -33,6 +33,8 @@ from pathlib import Path
 import click
 import tomlkit
 
+from tools import skills
+
 # ── copyright / license ───────────────────────────────────────────────────────
 
 _COPYRIGHT_HEADER = """\
@@ -714,6 +716,25 @@ def manpages() -> None:
             _gen_argc_manpage(mod_or_path, name, outdir)
         else:
             _gen_click_manpage(name, mod_or_path, fn, outdir)
+
+
+@main.command("install-skills")
+@click.option("-t", "--target", type=click.Path(path_type=Path), default=None,
+              help="Skills directory (default: $CLAUDE_CONFIG_DIR or ~/.claude, then skills/).")
+@click.option("--copy", is_flag=True, help="Copy instead of symlinking to the source tree.")
+@click.option("--force", is_flag=True, help="Replace skills that exist but are not ours.")
+def install_skills(target: Path | None, copy: bool, force: bool) -> None:
+    """Install this package's Claude Code skills for the current user.
+
+    Skills are symlinked from the source tree for editable installs and
+    copied otherwise.
+    """
+    src = skills.source_dir()
+    results = skills.install_all(src, target or skills.target_dir(), copy, force)
+    if not results:
+        raise click.ClickException(f"no skills found under {src}")
+    for r in results:
+        click.echo(f"{r.action:8} {r.name}  {r.note}")
 
 
 @main.command()

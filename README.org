@@ -60,6 +60,29 @@ time-entry              Monthly time allocator for fiscal-year project reporting
 tools                   Manage the tools package: import scripts, generate completions and man pages.
 #+end_example
 
+* Claude Code skills
+
+Skills for Claude Code live under [[file:skills/]], one directory per skill.  A
+Python wheel cannot write into =~/.claude=, so installing the package only
+ships them; put them in place with:
+
+#+begin_example
+$ tools install-skills    # symlinks (editable install) or copies into ~/.claude/skills
+#+end_example
+
+It honors =$CLAUDE_CONFIG_DIR= and takes =-t DIR=.  The repo's post-merge git
+hook runs it after a pull (see [[Cautions]]).  Current skills:
+
+- =/backup-claude-artifacts [DIR]= :: download claude.ai artifacts not yet held locally
+  into =<DIR>/<account>/<yours|shared>/<artifact>/= and keep a fuzzy-searchable
+  =index.html= at the root, account and origin levels.  Uses the helper =claude-artifacts=.
+  A session sees only the organization it is signed in to (switch with =/login=), so the
+  =<account>= name is looked up from that active org; the first time an org is seen, the skill
+  asks for a short name and runs =claude-artifacts setup --account NAME=, which records
+  org → name in =~/.claude/claude-artifacts.toml=.  Run the skill once per org.  The root
+  index lists all of them.  The directory defaults to =~/.cache/claude-artifacts=; change it
+  with =setup --dir PATH=, =$CLAUDE_ARTIFACTS_DIR= or the slash-command argument.
+
 * Multiple accounts
 
 Some of the tools (=manycron=) only make sense to use when you have
