@@ -124,6 +124,87 @@ def local_launch(argv: list[str]) -> subprocess.CompletedProcess:
 
 # ---------------------------------------------------------------- push mode
 
+# Seconds between polls of watched paths in --watch mode.
+WATCH_INTERVAL = 1.0
+
+
+def bypass_args() -> list[str]:
+    if PASS_FILE.exists():
+        log.debug("using bypass password file %s", PASS_FILE)
+        return ["--permissions-bypass", str(PASS_FILE)]
+    log.debug("no bypass password file at %s -- expect a confirmation popup", PASS_FILE)
+    return []
+
+
+def resolve_paths(paths: list[str]) -> list[str]:
+    """Return absolute forms of paths, dropping (and logging) any that don't exist."""
+    out = []
+    for raw_path in paths:
+        remote_path = str(Path(raw_path).resolve())
+        if Path(remote_path).exists():
+            out.append(remote_path)
+        else:
+            log.error("no such path: %s", remote_path)
+    return out
+
+
+def push_path(
+    remote_path: str,
+    host: str,
+    dest: str | None,
+    app: str | None,
+    bypass_arg: list[str],
+    dispatch: bool = True,
+    open_app: bool = True,
+) -> bool:
+    """Transfer one existing remote_path to the local stage area.
+
+    If dispatch, re-invoke this script locally to move the staged copy to its
+    final destination, and if open_app also open it there. Returns True if
+    the transfer succeeded."""
+    cfg = find_dotfile(Path(remote_path))
+    dest_override = dest or cfg.get("dest")
+    app_override = app or cfg.get("app")
+    is_dir = Path(remote_path).is_dir()
+    name = stage_name(host, remote_path)
+    log.debug("pushing %s: dest_override=%r app_override=%r is_dir=%s stage_name=%r",
+              remote_path, dest_override, app_override, is_dir, name)
+
+    if is_dir:
+        stage_path = f"{STAGE_ROOT_REMOTE_LITERAL}/{name}/"
+        # The dest dir must already exist on the LOCAL side before a
+        # directory transfer.
+        log.debug("pre-creating remote-side stage dir %r via local_launch", stage_path)
+        local_launch(["mkdir", "-p", stage_path])
+        time.sleep(0.3)  # fire-and-forget guard, see module docstring
+    else:
+        stage_path = f"{STAGE_ROOT_REMOTE_LITERAL}/{name}"
+    log.debug("stage_path=%r", stage_path)
+
+    transfer_cmd = ["kitten", "transfer", *bypass_arg, remote_path, stage_path]
+    log.debug("transfer_cmd=%r", transfer_cmd)
+    result = subprocess.run(transfer_cmd, check=False)
+    log.debug("kitten transfer returncode=%d", result.returncode)
+    if result.returncode != 0:
+        log.error("transfer failed for %s (rc=%d)", remote_path, result.returncode)
+        return False
+
+    if not dispatch:
+        log.debug("not dispatching, file stays in stage dir")
+        return True
+
+    dispatch_args = [LOCAL_SCRIPT, "--dispatch", stage_path, host, remote_path]
+    if dest_override:
+        dispatch_args += ["--dest", dest_override]
+    if app_override:
+        dispatch_args += ["--app", app_override]
+    if not open_app:
+        dispatch_args += ["--no-open"]
+    log.debug("dispatching on local machine (open_app=%s)", open_app)
+    local_launch(dispatch_args)
+    return True
+
+
 def run_push(
     paths: list[str],
     host: str | None,
@@ -133,60 +214,66 @@ def run_push(
 ) -> None:
     host = host or socket.gethostname()
     log.debug("run_push: host=%r paths=%r", host, paths)
+    bypass_arg = bypass_args()
+    for remote_path in resolve_paths(paths):
+        push_path(remote_path, host, dest, app, bypass_arg, dispatch=not no_open)
 
-    bypass_arg = []
-    if PASS_FILE.exists():
-        bypass_arg = ["--permissions-bypass", str(PASS_FILE)]
-        log.debug("using bypass password file %s", PASS_FILE)
-    else:
-        log.debug("no bypass password file at %s -- expect a confirmation popup", PASS_FILE)
 
-    for raw_path in paths:
-        remote_path = str(Path(raw_path).resolve())
-        log.debug("pushing %s", remote_path)
-        if not Path(remote_path).exists():
-            log.error("no such path: %s", remote_path)
-            continue
+def path_signature(path: Path) -> tuple | None:
+    """Summarize path's content state (recursively for a directory) as
+    (file, mtime, size) triples. None if path is (momentarily) missing."""
+    try:
+        files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+        return tuple((str(p), st.st_mtime_ns, st.st_size) for p in files for st in [p.stat()])
+    except FileNotFoundError:
+        return None
 
-        cfg = find_dotfile(Path(remote_path))
-        dest_override = dest or cfg.get("dest")
-        app_override = app or cfg.get("app")
-        is_dir = Path(remote_path).is_dir()
-        name = stage_name(host, remote_path)
-        log.debug("dest_override=%r app_override=%r is_dir=%s stage_name=%r",
-                  dest_override, app_override, is_dir, name)
 
-        if is_dir:
-            stage_path = f"{STAGE_ROOT_REMOTE_LITERAL}/{name}/"
-            # The dest dir must already exist on the LOCAL side before a
-            # directory transfer.
-            log.debug("pre-creating remote-side stage dir %r via local_launch", stage_path)
-            local_launch(["mkdir", "-p", stage_path])
-            time.sleep(0.3)  # fire-and-forget guard, see module docstring
-        else:
-            stage_path = f"{STAGE_ROOT_REMOTE_LITERAL}/{name}"
-        log.debug("stage_path=%r", stage_path)
+def run_watch(
+    paths: list[str],
+    host: str | None,
+    dest: str | None,
+    app: str | None,
+    no_open: bool,
+    reopen: bool,
+    interval: float = WATCH_INTERVAL,
+) -> None:
+    """Push paths, then keep re-pushing each one whenever it changes.
 
-        transfer_cmd = ["kitten", "transfer", *bypass_arg, remote_path, stage_path]
-        log.debug("transferring to %s", stage_path)
-        log.debug("transfer_cmd=%r", transfer_cmd)
-        result = subprocess.run(transfer_cmd, check=False)
-        log.debug("kitten transfer returncode=%d", result.returncode)
-        if result.returncode != 0:
-            log.error("transfer failed for %s (rc=%d)", remote_path, result.returncode)
-            continue
+    The first push opens unless no_open. Later pushes still dispatch (so a
+    staged copy is moved to its MAPPINGS destination over the old one) but
+    only open again if reopen. With no_open, nothing is ever dispatched.
 
-        if no_open:
-            log.debug("--no-open set, skipping dispatch")
-            continue
+    A change is pushed only once the path's signature has been stable for
+    one poll interval, so a file still being written is not sent half-done."""
+    host = host or socket.gethostname()
+    log.debug("run_watch: host=%r paths=%r no_open=%s reopen=%s interval=%s",
+              host, paths, no_open, reopen, interval)
+    bypass_arg = bypass_args()
+    remote_paths = resolve_paths(paths)
+    if not remote_paths:
+        return
 
-        dispatch_args = [LOCAL_SCRIPT, "--dispatch", stage_path, host, remote_path]
-        if dest_override:
-            dispatch_args += ["--dest", dest_override]
-        if app_override:
-            dispatch_args += ["--app", app_override]
-        log.debug("dispatching open on local machine")
-        local_launch(dispatch_args)
+    sent = {}
+    for remote_path in remote_paths:
+        sent[remote_path] = path_signature(Path(remote_path))
+        push_path(remote_path, host, dest, app, bypass_arg, dispatch=not no_open)
+    seen = dict(sent)
+
+    log.info("watching %d path(s), Ctrl-C to stop", len(remote_paths))
+    try:
+        while True:
+            time.sleep(interval)
+            for remote_path in remote_paths:
+                sig = path_signature(Path(remote_path))
+                if sig is not None and sig == seen[remote_path] and sig != sent[remote_path]:
+                    log.info("changed, re-pushing: %s", remote_path)
+                    push_path(remote_path, host, dest, app, bypass_arg,
+                              dispatch=not no_open, open_app=reopen)
+                    sent[remote_path] = sig
+                seen[remote_path] = sig
+    except KeyboardInterrupt:
+        log.debug("watch interrupted, exiting")
 
 
 # ------------------------------------------------------------ dispatch mode
@@ -198,9 +285,11 @@ def guess_app(path: Path, cfg: dict) -> str:
 
 
 def run_dispatch(stage_path: str, remote_host: str, remote_path: str,
-                  dest_override: str | None, app_override: str | None) -> None:
-    log.debug("run_dispatch: stage_path=%r remote_host=%r remote_path=%r dest_override=%r app_override=%r",
-              stage_path, remote_host, remote_path, dest_override, app_override)
+                  dest_override: str | None, app_override: str | None,
+                  no_open: bool = False) -> None:
+    log.debug("run_dispatch: stage_path=%r remote_host=%r remote_path=%r dest_override=%r "
+              "app_override=%r no_open=%s",
+              stage_path, remote_host, remote_path, dest_override, app_override, no_open)
     cfg = load_local_config()
     log.debug("local config: MAPPINGS=%r DISPATCH=%r DEFAULT_APP=%r",
               cfg["MAPPINGS"], cfg["DISPATCH"], cfg["DEFAULT_APP"])
@@ -232,6 +321,9 @@ def run_dispatch(stage_path: str, remote_host: str, remote_path: str,
     else:
         final_path = stage
     log.debug("final_path=%s", final_path)
+    if no_open:
+        log.debug("--no-open set, not opening %s", final_path)
+        return
 
     app = app_override or guess_app(final_path, cfg)
     log.debug("opening %s with %r", final_path, app)
@@ -269,11 +361,16 @@ def run_init() -> None:
 @click.option("--app", default=None, metavar="CMD", help="Override the app/command used to open the file.")
 @click.option("--host", default=None, help="Override the remote host id (push mode only).")
 @click.option("--no-open", "no_open", is_flag=True, help="Transfer only, don't open.")
+@click.option("--watch", is_flag=True,
+              help="Keep running and re-transfer each path whenever it changes.")
+@click.option("--reopen", is_flag=True, default=False,
+              help="With --watch, open again after every re-transfer, not just the first.")
 @click.option("-L", "--log-level", default="warning", show_default=True,
               help="Logging level: debug, info, warning, error.")
 @click.argument("paths", nargs=-1)
 def main(init: bool, dispatch: bool, dest: str | None, app: str | None, host: str | None,
-         no_open: bool, log_level: str, paths: tuple[str, ...]) -> None:
+         no_open: bool, watch: bool, reopen: bool, log_level: str,
+         paths: tuple[str, ...]) -> None:
     """Push a remote file/dir to the local machine and open it there.
 
     The SAME script runs in two roles, on two machines:
@@ -282,9 +379,13 @@ def main(init: bool, dispatch: bool, dest: str | None, app: str | None, host: st
       push (default) -- run in a remote shell:
         kitty-open somefile.png
         kitty-open ~/work/A/plots/          # a directory
+        kitty-open --watch plot.pdf         # re-push on every change
       It transfers the path to a flat local staging area via `kitten
       transfer`, then asks the local kitty instance (over the forwarded
       remote-control socket) to re-invoke this same script in dispatch mode.
+      With --watch it then stays running, polling the path(s) and
+      re-transferring on change. Only the first transfer opens, unless
+      --reopen; --no-open never opens.
 
     \b
       dispatch (internal, --dispatch) -- invoked locally by `kitty @
@@ -339,13 +440,16 @@ def main(init: bool, dispatch: bool, dest: str | None, app: str | None, host: st
 
     if dispatch:
         stage_path, remote_host, remote_path = paths[:3]
-        run_dispatch(stage_path, remote_host, remote_path, dest, app)
+        run_dispatch(stage_path, remote_host, remote_path, dest, app, no_open)
         return
 
     if not paths:
         raise click.UsageError("no file or directory given")
 
-    run_push(list(paths), host, dest, app, no_open)
+    if watch:
+        run_watch(list(paths), host, dest, app, no_open, reopen)
+    else:
+        run_push(list(paths), host, dest, app, no_open)
 
 
 if __name__ == "__main__":
